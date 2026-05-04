@@ -33,30 +33,41 @@ def temp_path_for(path: Path) -> Path:
     return path.with_name(f"{path.name}.{os.getpid()}.tmp")
 
 
-def backup_session_index(index_path: Path, backup_dir: Path) -> Path | None:
-    if not index_path.exists():
+def backup_file(path: Path, backup_dir: Path) -> Path | None:
+    if not path.exists():
         return None
     backup_dir.mkdir(parents=True, exist_ok=True)
-    backup_path = backup_path_for(index_path, backup_dir)
-    shutil.copy2(index_path, backup_path)
-    if backup_path.read_bytes() != index_path.read_bytes():
+    backup_path = backup_path_for(path, backup_dir)
+    shutil.copy2(path, backup_path)
+    if backup_path.read_bytes() != path.read_bytes():
         try:
             backup_path.unlink()
         except OSError:
             pass
-        raise CodexStateError(f"Could not verify session index backup: {backup_path}")
+        raise CodexStateError(f"Could not verify backup: {backup_path}")
     return backup_path
 
 
-def restore_session_index_backup(index_path: Path, backup_path: Path | None) -> None:
+def backup_session_index(index_path: Path, backup_dir: Path) -> Path | None:
+    try:
+        return backup_file(index_path, backup_dir)
+    except CodexStateError as exc:
+        raise CodexStateError(f"Could not verify session index backup: {backup_dir}") from exc
+
+
+def restore_file_backup(path: Path, backup_path: Path | None) -> None:
     if backup_path is None:
         try:
-            index_path.unlink()
+            path.unlink()
         except FileNotFoundError:
             pass
         return
-    shutil.copy2(backup_path, index_path)
+    shutil.copy2(backup_path, path)
     backup_path.unlink()
+
+
+def restore_session_index_backup(index_path: Path, backup_path: Path | None) -> None:
+    restore_file_backup(index_path, backup_path)
 
 
 def remove_backup_dir_if_empty(backup_dir: Path) -> None:

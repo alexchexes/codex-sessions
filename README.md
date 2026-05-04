@@ -170,7 +170,8 @@ Rename a session in `session_index.jsonl`:
 codex-sessions rename 019dd5ce-19e1-78c3-9313-325228ddd983 "Better session title"
 ```
 
-`rename` also backs up `session_index.jsonl` under `backups/codex-sessions/` and
+`rename` also updates the rollout `thread_name_updated` event when a rollout
+file is available, backs up changed files under `backups/codex-sessions/`, and
 resets Codex state cache. You can use an exact current title instead of an ID,
 but if multiple sessions have that title the command will ask you to rerun with
 one concrete ID.
@@ -213,7 +214,7 @@ terminal, including Git Bash/MSYS terminals on Windows. Use `--color always` or
 `--color never` to override auto-detection.
 
 Search caches extracted searchable text under
-`~/.codex/cache/codex-sessions/search-v2.json` and invalidates entries when the
+`~/.codex/cache/codex-sessions/search-v3.json` and invalidates entries when the
 source rollout file size or modification time changes. Use `--rebuild-cache` to
 refresh cached entries, or `--no-cache` for a one-off uncached search.
 `list` uses the same cache for rollout metadata and inferred titles.

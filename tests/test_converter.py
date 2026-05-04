@@ -897,6 +897,43 @@ class ConverterTests(unittest.TestCase):
             self.assertIn("Please title this event message.", lines[0])
             self.assertNotIn("Context from my IDE setup", lines[0])
 
+    def test_list_sessions_prefers_thread_name_updated_title_from_rollout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            session_id = "cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd"
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "thread_name_updated",
+                            "thread_id": session_id,
+                            "thread_name": "Rollout title wins",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-30T18:21:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "This fallback title should not be used.",
+                        },
+                    },
+                ],
+            )
+
+            lines = list_session_lines(codex_home)
+
+            self.assertEqual(len(lines), 1)
+            self.assertIn("Rollout title wins", lines[0])
+            self.assertNotIn("This fallback title", lines[0])
+
     def test_list_sessions_reuses_cached_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
@@ -1088,6 +1125,47 @@ class ConverterTests(unittest.TestCase):
             self.assertIn("updated_at: 2026-04-30T18:21:39+00:00", output)
             self.assertIn("State cache reset required after repair.", output)
             self.assertNotIn(indexed_id, output)
+
+    def test_repair_index_prefers_thread_name_updated_title_from_rollout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            missing_id = "57575757-5757-5757-5757-575757575757"
+            write_jsonl(codex_home / "session_index.jsonl", [])
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-21-39-{missing_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:21:39Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "thread_name_updated",
+                            "thread_id": missing_id,
+                            "thread_name": "Repair uses rollout title",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-30T18:22:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "This fallback title should not be used.",
+                        },
+                    },
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["repair-index", "--dry-run", "--codex-home", str(codex_home)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn(f"{missing_id} - Repair uses rollout title", output)
+            self.assertNotIn("This fallback title", output)
 
     def test_repair_index_dry_run_reports_no_missing_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1298,6 +1376,115 @@ class ConverterTests(unittest.TestCase):
                 [],
             )
 
+    def test_rename_updates_rollout_when_index_title_is_already_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+            session_id = "15151515-1515-1515-1515-151515151515"
+            index_path = codex_home / "session_index.jsonl"
+            write_jsonl(index_path, [{"id": session_id, "thread_name": "New title"}])
+            rollout_path = sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            write_jsonl(
+                rollout_path,
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "thread_name_updated",
+                            "thread_id": session_id,
+                            "thread_name": "Old rollout title",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-30T18:21:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "Session body",
+                        },
+                    },
+                ],
+            )
+            original_rollout = rollout_path.read_text(encoding="utf-8")
+            state_db = codex_home / "state_5.sqlite"
+            state_db.write_text("state", encoding="utf-8")
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["rename", "--codex-home", str(codex_home), session_id, "New title"])
+
+            output = buffer.getvalue()
+            rollout_records = [
+                json.loads(line)
+                for line in rollout_path.read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            backup_dirs = sorted((codex_home / "backups" / "codex-sessions").iterdir())
+            self.assertEqual(result, 0)
+            self.assertIn("Session index title was already set.", output)
+            self.assertIn("Rollout title from: Old rollout title", output)
+            self.assertEqual(
+                rollout_records[0]["payload"]["thread_name"],
+                "New title",
+            )
+            self.assertEqual(len(backup_dirs), 1)
+            backup_dir = backup_dirs[0]
+            self.assertFalse((backup_dir / "session_index.jsonl").exists())
+            self.assertEqual(
+                (backup_dir / rollout_path.name).read_text(encoding="utf-8"),
+                original_rollout,
+            )
+            self.assertEqual((backup_dir / "state_5.sqlite").read_text(encoding="utf-8"), "state")
+
+    def test_rename_inserts_rollout_title_event_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+            session_id = "16161616-1616-1616-1616-161616161616"
+            write_jsonl(
+                codex_home / "session_index.jsonl", [{"id": session_id, "thread_name": "Old"}]
+            )
+            rollout_path = sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            write_jsonl(
+                rollout_path,
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "session_meta",
+                        "payload": {"id": session_id},
+                    },
+                    {
+                        "timestamp": "2026-04-30T18:21:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "Session body",
+                        },
+                    },
+                ],
+            )
+
+            with redirect_stdout(StringIO()):
+                result = main(["rename", "--codex-home", str(codex_home), session_id, "New"])
+
+            rollout_records = [
+                json.loads(line)
+                for line in rollout_path.read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            self.assertEqual(result, 0)
+            self.assertEqual(rollout_records[0]["type"], "session_meta")
+            self.assertEqual(rollout_records[1]["type"], "event_msg")
+            self.assertEqual(rollout_records[1]["timestamp"], "2026-04-30T18:20:39Z")
+            self.assertEqual(rollout_records[1]["payload"]["type"], "thread_name_updated")
+            self.assertEqual(rollout_records[1]["payload"]["thread_name"], "New")
+            self.assertEqual(rollout_records[-1]["timestamp"], "2026-04-30T18:21:39Z")
+
     def test_rename_accepts_exact_existing_title(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
@@ -1350,7 +1537,7 @@ class ConverterTests(unittest.TestCase):
                         ]
                     )
 
-            self.assertIn("Rolled back session_index.jsonl", str(raised.exception))
+            self.assertIn("Rolled back Codex session files", str(raised.exception))
             self.assertEqual(index_path.read_text(encoding="utf-8"), original_index)
             self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
             self.assertEqual(

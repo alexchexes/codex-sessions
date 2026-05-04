@@ -22,10 +22,12 @@ from codex_sessions_converter.codex_state import (
     CodexStateError,
     StateCacheBackup,
     backup_dir_for,
+    backup_file,
     backup_label,
     backup_session_index,
     remove_backup_dir_if_empty,
     reset_codex_state_cache,
+    restore_file_backup,
     restore_session_index_backup,
     temp_path_for,
 )
@@ -42,8 +44,8 @@ NO_SESSION_INDEX_ENTRY = "NO ENTRY IN session_index.jsonl"
 MARKDOWN_FEATURES = {"tools", "metadata", "raw"}
 MARKDOWN_TOOL_MODES = {"auto", "none", "names", "smart", "preview", "full"}
 MARKDOWN_IMAGE_MODES = {"truncate", "extract", "inline"}
-SEARCH_CACHE_VERSION = 2
-SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v2.json"
+SEARCH_CACHE_VERSION = 3
+SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v3.json"
 DEFAULT_TOOL_PREVIEW_CHARS = 700
 DATA_IMAGE_PREFIX_CHARS = 24
 MAX_MATCHES_BEFORE_LINE_OMISSION = 2
@@ -148,6 +150,7 @@ class SearchResult:
 @dataclass(frozen=True)
 class SearchDocument:
     session_id: str | None
+    thread_name: str | None
     started_at: datetime | None
     ended_at: datetime | None
     visible_lines: tuple[str, ...]
@@ -177,6 +180,11 @@ class RenameSessionResult:
     session_id: str
     old_thread_name: str
     new_thread_name: str
+    index_changed: bool
+    rollout_changed: bool
+    rollout_path: Path | None
+    rollout_backup_path: Path | None
+    rollout_thread_name: str | None
     changed: bool
     session_index_backup_path: Path | None
     state_cache_backups: tuple[StateCacheBackup, ...]
@@ -998,6 +1006,7 @@ def search_document_lines(document: SearchDocument, options: SearchOptions) -> l
 
 def build_search_document(input_path: Path, redaction: str) -> SearchDocument:
     session_id = session_id_from_path(input_path)
+    thread_name: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
     line_groups: dict[str, list[str]] = {"visible": [], "metadata": [], "tools": []}
@@ -1021,6 +1030,14 @@ def build_search_document(input_path: Path, redaction: str) -> SearchDocument:
             payload_id = payload.get("id")
             if isinstance(payload_id, str) and payload_id:
                 session_id = payload_id
+        if raw_record.get("type") == "event_msg" and isinstance(payload, dict):
+            event_session_id = thread_name_updated_session_id(payload)
+            if session_id is None and event_session_id:
+                session_id = event_session_id
+            if thread_name_updated_matches_session(payload, session_id):
+                event_thread_name = thread_name_updated_name(payload)
+                if event_thread_name:
+                    thread_name = event_thread_name
 
         record = sanitize(raw_record, redaction)
         for group, lines in render_search_line_groups(record):
@@ -1031,12 +1048,39 @@ def build_search_document(input_path: Path, redaction: str) -> SearchDocument:
 
     return SearchDocument(
         session_id=session_id,
+        thread_name=thread_name,
         started_at=started_at,
         ended_at=ended_at,
         visible_lines=tuple(line_groups["visible"]),
         metadata_lines=tuple(line_groups["metadata"]),
         tool_lines=tuple(line_groups["tools"]),
     )
+
+
+def thread_name_updated_session_id(payload: Mapping[str, Any]) -> str | None:
+    if payload.get("type") != "thread_name_updated":
+        return None
+    thread_id = payload.get("thread_id")
+    return thread_id if isinstance(thread_id, str) and thread_id else None
+
+
+def thread_name_updated_name(payload: Mapping[str, Any]) -> str | None:
+    if payload.get("type") != "thread_name_updated":
+        return None
+    thread_name = payload.get("thread_name")
+    if not isinstance(thread_name, str):
+        return None
+    normalized = thread_name.strip()
+    return normalized or None
+
+
+def thread_name_updated_matches_session(payload: Mapping[str, Any], session_id: str | None) -> bool:
+    event_session_id = thread_name_updated_session_id(payload)
+    if event_session_id is None:
+        return False
+    if session_id is None:
+        return True
+    return normalize_session_id(event_session_id) == normalize_session_id(session_id)
 
 
 def render_search_line_groups(record: dict[str, Any]) -> list[tuple[str, list[str]]]:
@@ -1096,6 +1140,8 @@ def render_labeled_search_lines(label: str, text: str) -> list[str]:
 
 
 def infer_search_document_title(document: SearchDocument) -> str | None:
+    if document.thread_name:
+        return document.thread_name
     user_title = first_inferred_title_with_prefix(document.visible_lines, "User: ")
     if user_title:
         return user_title
@@ -1471,9 +1517,13 @@ def cached_search_document(
     session_id = entry.get("session_id")
     if session_id is not None and not isinstance(session_id, str):
         return None
+    thread_name = entry.get("thread_name")
+    if thread_name is not None and not isinstance(thread_name, str):
+        return None
 
     return SearchDocument(
         session_id=session_id,
+        thread_name=thread_name,
         started_at=parse_timestamp(entry.get("started_at")),
         ended_at=parse_timestamp(entry.get("ended_at")),
         visible_lines=visible_lines,
@@ -1499,6 +1549,7 @@ def search_cache_entry(
         "mtime_ns": stat_result.st_mtime_ns,
         "redaction": redaction,
         "session_id": document.session_id,
+        "thread_name": document.thread_name,
         "started_at": document.started_at.isoformat() if document.started_at else None,
         "ended_at": document.ended_at.isoformat() if document.ended_at else None,
         "visible_lines": list(document.visible_lines),
@@ -1807,6 +1858,80 @@ def resolve_session_index_record(records: Sequence[Any], target: str) -> tuple[i
     )
 
 
+def read_rollout_records(path: Path) -> list[dict[str, Any]]:
+    return [record for _, record in iter_jsonl_objects(path)]
+
+
+def write_rollout_records(path: Path, records: Sequence[Mapping[str, Any]]) -> None:
+    serialized = "".join(
+        json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in records
+    )
+    temp_path = temp_path_for(path)
+    temp_path.write_text(serialized, encoding="utf-8")
+    temp_path.replace(path)
+
+
+def optional_session_file_for_id(session_id: str, codex_home: Path) -> Path | None:
+    try:
+        return resolve_session_id(session_id, codex_home)
+    except CliError as exc:
+        if str(exc).startswith("No Codex session found for ID:"):
+            return None
+        raise
+
+
+def thread_name_update_event(
+    session_id: str, thread_name: str, timestamp: str | None
+) -> dict[str, Any]:
+    return {
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "type": "event_msg",
+        "payload": {
+            "type": "thread_name_updated",
+            "thread_id": session_id,
+            "thread_name": thread_name,
+        },
+    }
+
+
+def renamed_rollout_records(
+    records: Sequence[dict[str, Any]], session_id: str, new_thread_name: str
+) -> tuple[list[dict[str, Any]], str | None, bool]:
+    latest_index: int | None = None
+    latest_thread_name: str | None = None
+    for index, record in enumerate(records):
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if not thread_name_updated_matches_session(payload, session_id):
+            continue
+        latest_index = index
+        latest_thread_name = thread_name_updated_name(payload) or latest_thread_name
+
+    if latest_index is not None:
+        if latest_thread_name == new_thread_name:
+            return list(records), latest_thread_name, False
+        updated_records = list(records)
+        updated_record = dict(updated_records[latest_index])
+        updated_payload = dict(updated_record.get("payload", {}))
+        updated_payload["thread_id"] = session_id
+        updated_payload["thread_name"] = new_thread_name
+        updated_record["payload"] = updated_payload
+        updated_records[latest_index] = updated_record
+        return updated_records, latest_thread_name, True
+
+    first_timestamp = None
+    if records:
+        raw_timestamp = records[0].get("timestamp")
+        if isinstance(raw_timestamp, str):
+            first_timestamp = raw_timestamp
+    inserted_record = thread_name_update_event(session_id, new_thread_name, first_timestamp)
+    insert_at = 1 if records else 0
+    updated_records = list(records)
+    updated_records.insert(insert_at, inserted_record)
+    return updated_records, None, True
+
+
 def rename_session_index_entry(
     codex_home: Path,
     session_index_path: Path | None,
@@ -1825,43 +1950,79 @@ def rename_session_index_entry(
         raise CliError(f"Matched session_index.jsonl entry has no session id: {target}")
 
     old_thread_name = session_index_record_thread_name(record)
-    if old_thread_name == normalized_new_thread_name:
+    index_changed = old_thread_name != normalized_new_thread_name
+    rollout_path = optional_session_file_for_id(session_id, codex_home)
+    rollout_records: list[dict[str, Any]] | None = None
+    updated_rollout_records: list[dict[str, Any]] | None = None
+    rollout_thread_name: str | None = None
+    rollout_changed = False
+    if rollout_path is not None:
+        rollout_records = read_rollout_records(rollout_path)
+        updated_rollout_records, rollout_thread_name, rollout_changed = renamed_rollout_records(
+            rollout_records, session_id, normalized_new_thread_name
+        )
+
+    if not index_changed and not rollout_changed:
         return RenameSessionResult(
             session_id=session_id,
             old_thread_name=old_thread_name,
             new_thread_name=normalized_new_thread_name,
+            index_changed=False,
+            rollout_changed=False,
+            rollout_path=rollout_path,
+            rollout_backup_path=None,
+            rollout_thread_name=rollout_thread_name,
             changed=False,
             session_index_backup_path=None,
             state_cache_backups=(),
         )
 
     updated_records = list(records)
-    updated_record = dict(record)
-    updated_record["thread_name"] = normalized_new_thread_name
-    updated_records[record_index] = updated_record
+    if index_changed:
+        updated_record = dict(record)
+        updated_record["thread_name"] = normalized_new_thread_name
+        updated_records[record_index] = updated_record
 
     label = backup_label()
     backup_dir = backup_dir_for(codex_home, label)
-    index_backup_path = backup_session_index(index_path, backup_dir)
+    index_backup_path = backup_session_index(index_path, backup_dir) if index_changed else None
+    rollout_backup_path = (
+        backup_file(rollout_path, backup_dir)
+        if rollout_changed and rollout_path is not None
+        else None
+    )
     try:
-        write_session_index_records(index_path, updated_records)
+        if index_changed:
+            write_session_index_records(index_path, updated_records)
+        if rollout_changed:
+            if rollout_path is None or updated_rollout_records is None:
+                raise CliError(f"No Codex rollout file found for ID: {session_id}")
+            write_rollout_records(rollout_path, updated_rollout_records)
         state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
-    except (CodexStateError, OSError) as exc:
+    except (CliError, CodexStateError, OSError) as exc:
         try:
-            restore_session_index_backup(index_path, index_backup_path)
+            if rollout_path is not None and rollout_changed:
+                restore_file_backup(rollout_path, rollout_backup_path)
+            if index_changed:
+                restore_session_index_backup(index_path, index_backup_path)
             remove_backup_dir_if_empty(backup_dir)
         except OSError as restore_exc:
             raise CliError(
-                f"{exc} Also failed to restore session_index.jsonl from backup: {restore_exc}"
+                f"{exc} Also failed to restore Codex session files from backup: {restore_exc}"
             ) from restore_exc
         raise CliError(
-            f"{exc} Rolled back session_index.jsonl. Close all Codex sessions and retry."
+            f"{exc} Rolled back Codex session files. Close all Codex sessions and retry."
         ) from exc
 
     return RenameSessionResult(
         session_id=session_id,
         old_thread_name=old_thread_name,
         new_thread_name=normalized_new_thread_name,
+        index_changed=index_changed,
+        rollout_changed=rollout_changed,
+        rollout_path=rollout_path,
+        rollout_backup_path=rollout_backup_path,
+        rollout_thread_name=rollout_thread_name,
         changed=True,
         session_index_backup_path=index_backup_path,
         state_cache_backups=state_cache_backups,
@@ -3301,10 +3462,20 @@ def run_rename_command(args: argparse.Namespace) -> int:
         return 0
 
     print(encode_for_output(f"Renamed session: {result.session_id}", sys.stdout.encoding))
-    print(encode_for_output(f"From: {result.old_thread_name}", sys.stdout.encoding))
+    if result.index_changed:
+        print(encode_for_output(f"From: {result.old_thread_name}", sys.stdout.encoding))
+    else:
+        print(encode_for_output("Session index title was already set.", sys.stdout.encoding))
     print(encode_for_output(f"To: {result.new_thread_name}", sys.stdout.encoding))
+    if result.rollout_changed:
+        rollout_from = result.rollout_thread_name or "NO ROLLOUT TITLE EVENT"
+        print(encode_for_output(f"Rollout title from: {rollout_from}", sys.stdout.encoding))
+        if result.rollout_path is not None:
+            print(f"Rollout file: {result.rollout_path}")
     if result.session_index_backup_path is not None:
         print(f"Session index backup: {result.session_index_backup_path}")
+    if result.rollout_backup_path is not None:
+        print(f"Rollout backup: {result.rollout_backup_path}")
     if result.state_cache_backups:
         print("State cache backups:")
         for backup in result.state_cache_backups:
