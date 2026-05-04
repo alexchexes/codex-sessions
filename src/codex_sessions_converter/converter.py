@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -141,6 +142,29 @@ class SearchDocument:
     visible_lines: tuple[str, ...]
     metadata_lines: tuple[str, ...]
     tool_lines: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RepairIndexCandidate:
+    session_id: str
+    thread_name: str
+    updated_at: datetime | None
+    relative_path: str
+
+
+@dataclass(frozen=True)
+class StateCacheBackup:
+    original_path: Path
+    backup_path: Path
+
+
+@dataclass(frozen=True)
+class RepairIndexResult:
+    candidates: tuple[RepairIndexCandidate, ...]
+    warnings: tuple[str, ...]
+    skipped_without_id: int
+    session_index_backup_path: Path | None
+    state_cache_backups: tuple[StateCacheBackup, ...]
 
 
 class CliError(Exception):
@@ -292,6 +316,47 @@ def parse_search_args(
     return parser.parse_args(argv)
 
 
+def parse_repair_index_args(
+    argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} repair-index",
+        description="Repair missing session_index.jsonl entries for rollout JSONL files.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show missing session_index.jsonl entries without modifying Codex state.",
+    )
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=default_codex_home(),
+        help="Codex home directory. Defaults to CODEX_HOME or ~/.codex.",
+    )
+    parser.add_argument(
+        "--session-index",
+        type=Path,
+        help="Path to session_index.jsonl. Defaults to <codex-home>/session_index.jsonl.",
+    )
+    parser.add_argument(
+        "--sessions-dir",
+        type=Path,
+        help="Path to Codex sessions directory. Defaults to <codex-home>/sessions.",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Do not read or write the extracted session metadata cache.",
+    )
+    parser.add_argument(
+        "--rebuild-cache",
+        action="store_true",
+        help="Ignore existing cached session metadata and rewrite cache entries.",
+    )
+    return parser.parse_args(argv)
+
+
 def parse_args(
     argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
 ) -> argparse.Namespace:
@@ -304,6 +369,8 @@ def parse_args(
             "  list       list sessions and cross-check session_index.jsonl with rollout files\n\n"
             "  find       search sessions under Codex home\n"
             "  grep       alias for find\n\n"
+            "  repair-index\n"
+            "             inspect missing session_index.jsonl entries\n\n"
             "Markdown include presets:\n"
             "  dialogue   visible user/Codex messages, reasoning, progress messages\n"
             "  default    dialogue plus tool calls and tool outputs\n"
@@ -947,8 +1014,10 @@ def render_search_line_groups(record: dict[str, Any]) -> list[tuple[str, list[st
             text = content_to_text(payload.get("content"))
             if role == "assistant":
                 return [("visible", render_labeled_search_lines("Codex", text))]
-            if role == "user" and not is_injected_user_context(text):
-                return [("visible", render_labeled_search_lines("User", text))]
+            if role == "user":
+                searchable_text = searchable_user_message_text(text)
+                if searchable_text:
+                    return [("visible", render_labeled_search_lines("User", searchable_text))]
             return []
         if payload_type == "reasoning":
             return []
@@ -989,6 +1058,16 @@ def infer_search_document_title(document: SearchDocument) -> str | None:
     if user_title:
         return user_title
     return first_inferred_title_with_prefix(document.visible_lines, "Codex: ")
+
+
+def fallback_thread_name(session_id: str) -> str:
+    return f"Imported session {session_id[:8]}"
+
+
+def inferred_thread_name(document: SearchDocument) -> str:
+    if document.session_id is None:
+        return "Imported session"
+    return infer_search_document_title(document) or fallback_thread_name(document.session_id)
 
 
 def first_inferred_title_with_prefix(lines: Sequence[str], prefix: str) -> str | None:
@@ -1534,6 +1613,218 @@ def search_sessions(
     return results, warnings
 
 
+def missing_session_index_candidates(
+    codex_home: Path,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    *,
+    use_cache: bool = True,
+    rebuild_cache: bool = False,
+) -> tuple[list[RepairIndexCandidate], list[str], int]:
+    index_path = session_index_path or codex_home / "session_index.jsonl"
+    resolved_sessions_dir = sessions_dir or codex_home / "sessions"
+    if not resolved_sessions_dir.exists():
+        raise CliError(f"Sessions directory not found: {resolved_sessions_dir}")
+
+    index_entries = read_session_index(index_path)
+    indexed_ids = {normalize_session_id(entry.session_id) for entry in index_entries}
+    documents, warnings = load_search_documents(
+        codex_home=codex_home,
+        sessions_dir=resolved_sessions_dir,
+        redaction="...",
+        use_cache=use_cache,
+        rebuild_cache=rebuild_cache,
+    )
+
+    candidates = []
+    skipped_without_id = 0
+    for session_path, document in documents:
+        if not document.session_id:
+            skipped_without_id += 1
+            continue
+        if normalize_session_id(document.session_id) in indexed_ids:
+            continue
+        candidates.append(
+            RepairIndexCandidate(
+                session_id=document.session_id,
+                thread_name=inferred_thread_name(document),
+                updated_at=document.ended_at or document.started_at,
+                relative_path=format_session_file_path(session_path, resolved_sessions_dir),
+            )
+        )
+
+    return candidates, warnings, skipped_without_id
+
+
+def format_repair_index_candidate(candidate: RepairIndexCandidate) -> str:
+    updated_at = candidate.updated_at.isoformat() if candidate.updated_at else "UNKNOWN"
+    return (
+        f"{candidate.session_id} - {candidate.thread_name} - "
+        f"{candidate.relative_path} - updated_at: {updated_at}"
+    )
+
+
+def format_session_index_timestamp(value: datetime | None) -> str:
+    timestamp = value or datetime.now(timezone.utc)
+    converted = timestamp.astimezone(timezone.utc)
+    return converted.isoformat().replace("+00:00", "Z")
+
+
+def session_index_record_for_candidate(candidate: RepairIndexCandidate) -> dict[str, str]:
+    return {
+        "id": candidate.session_id,
+        "thread_name": candidate.thread_name,
+        "updated_at": format_session_index_timestamp(candidate.updated_at),
+    }
+
+
+def backup_label() -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return f"{timestamp}-{os.getpid()}"
+
+
+def backup_path_for(path: Path, label: str) -> Path:
+    return path.with_name(f"{path.name}.backup-{label}")
+
+
+def temp_path_for(path: Path) -> Path:
+    return path.with_name(f"{path.name}.{os.getpid()}.tmp")
+
+
+def backup_session_index(index_path: Path, label: str) -> Path | None:
+    if not index_path.exists():
+        return None
+    backup_path = backup_path_for(index_path, label)
+    shutil.copy2(index_path, backup_path)
+    if backup_path.read_bytes() != index_path.read_bytes():
+        try:
+            backup_path.unlink()
+        except OSError:
+            pass
+        raise CliError(f"Could not verify session index backup: {backup_path}")
+    return backup_path
+
+
+def append_session_index_records(
+    index_path: Path, candidates: Sequence[RepairIndexCandidate]
+) -> None:
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
+    separator = "\n" if existing_text and not existing_text.endswith("\n") else ""
+    appended_text = "".join(
+        json.dumps(
+            session_index_record_for_candidate(candidate),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+        for candidate in candidates
+    )
+    temp_path = temp_path_for(index_path)
+    temp_path.write_text(f"{existing_text}{separator}{appended_text}", encoding="utf-8")
+    temp_path.replace(index_path)
+
+
+def restore_session_index_backup(index_path: Path, backup_path: Path | None) -> None:
+    if backup_path is None:
+        try:
+            index_path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    shutil.copy2(backup_path, index_path)
+    backup_path.unlink()
+
+
+def state_cache_files(codex_home: Path) -> list[Path]:
+    candidates = []
+    for path in codex_home.glob("state_*.sqlite*"):
+        if path.is_file():
+            candidates.append(path)
+    return sorted(candidates)
+
+
+def backup_state_cache_file(path: Path, label: str) -> StateCacheBackup:
+    backup_path = backup_path_for(path, label)
+    path.replace(backup_path)
+    if not backup_path.exists():
+        raise CliError(f"Could not verify state cache backup: {backup_path}")
+    return StateCacheBackup(original_path=path, backup_path=backup_path)
+
+
+def restore_state_cache_backups(backups: Sequence[StateCacheBackup]) -> None:
+    for backup in reversed(backups):
+        if backup.backup_path.exists() and not backup.original_path.exists():
+            backup.backup_path.replace(backup.original_path)
+
+
+def reset_codex_state_cache(codex_home: Path, label: str) -> tuple[StateCacheBackup, ...]:
+    backups: list[StateCacheBackup] = []
+    for path in state_cache_files(codex_home):
+        try:
+            backups.append(backup_state_cache_file(path, label))
+        except OSError as exc:
+            restore_state_cache_backups(backups)
+            raise CliError(
+                f"Could not reset Codex state cache file {path}: {exc}. "
+                "Close all Codex sessions and retry."
+            ) from exc
+        except CliError:
+            restore_state_cache_backups(backups)
+            raise
+    return tuple(backups)
+
+
+def repair_session_index(
+    codex_home: Path,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    *,
+    use_cache: bool = True,
+    rebuild_cache: bool = False,
+) -> RepairIndexResult:
+    index_path = session_index_path or codex_home / "session_index.jsonl"
+    candidates, warnings, skipped_without_id = missing_session_index_candidates(
+        codex_home=codex_home,
+        session_index_path=index_path,
+        sessions_dir=sessions_dir,
+        use_cache=use_cache,
+        rebuild_cache=rebuild_cache,
+    )
+    if not candidates:
+        return RepairIndexResult(
+            candidates=(),
+            warnings=tuple(warnings),
+            skipped_without_id=skipped_without_id,
+            session_index_backup_path=None,
+            state_cache_backups=(),
+        )
+
+    label = backup_label()
+    index_backup_path = backup_session_index(index_path, label)
+    try:
+        append_session_index_records(index_path, candidates)
+        state_cache_backups = reset_codex_state_cache(codex_home, label)
+    except (CliError, OSError) as exc:
+        try:
+            restore_session_index_backup(index_path, index_backup_path)
+        except OSError as restore_exc:
+            raise CliError(
+                f"{exc} Also failed to restore session_index.jsonl from backup: {restore_exc}"
+            ) from restore_exc
+        raise CliError(
+            f"{exc} Rolled back session_index.jsonl. Close all Codex sessions and retry."
+        ) from exc
+
+    return RepairIndexResult(
+        candidates=tuple(candidates),
+        warnings=tuple(warnings),
+        skipped_without_id=skipped_without_id,
+        session_index_backup_path=index_backup_path,
+        state_cache_backups=state_cache_backups,
+    )
+
+
 def text_with_highlights(line: SearchLine, encoding: str | None) -> Text:
     rendered = Text()
     position = 0
@@ -2017,6 +2308,21 @@ def is_image_wrapper_text(text: str) -> bool:
 def is_injected_user_context(text: str) -> bool:
     stripped = text.lstrip()
     return stripped.startswith(("# AGENTS.md instructions", "<environment_context>"))
+
+
+def searchable_user_message_text(text: str) -> str:
+    if is_injected_user_context(text):
+        return ""
+
+    stripped = text.lstrip()
+    if stripped.startswith("# Context from my IDE setup:"):
+        marker = "## My request for Codex:"
+        marker_index = text.find(marker)
+        if marker_index == -1:
+            return ""
+        return text[marker_index + len(marker) :].strip()
+
+    return text
 
 
 def render_json_block_content(value: Any) -> str:
@@ -2794,6 +3100,83 @@ def run_search_command(args: argparse.Namespace) -> int:
     return 0 if results else 1
 
 
+def run_repair_index_command(args: argparse.Namespace) -> int:
+    codex_home = args.codex_home.expanduser().resolve()
+    session_index_path = (
+        args.session_index.expanduser().resolve()
+        if args.session_index
+        else codex_home / "session_index.jsonl"
+    )
+    sessions_dir = (
+        args.sessions_dir.expanduser().resolve() if args.sessions_dir else codex_home / "sessions"
+    )
+
+    if args.dry_run:
+        try:
+            candidates, warnings, skipped_without_id = missing_session_index_candidates(
+                codex_home=codex_home,
+                session_index_path=session_index_path,
+                sessions_dir=sessions_dir,
+                use_cache=not args.no_cache,
+                rebuild_cache=args.rebuild_cache,
+            )
+        except (CliError, ValueError) as exc:
+            raise SystemExit(str(exc)) from exc
+        for warning in warnings:
+            print(
+                encode_for_output(f"Warning: {warning}", sys.stderr.encoding),
+                file=sys.stderr,
+            )
+        print(f"Missing session_index.jsonl entries: {len(candidates)}")
+        if candidates:
+            print("Would add:")
+            for candidate in candidates:
+                print(
+                    encode_for_output(format_repair_index_candidate(candidate), sys.stdout.encoding)
+                )
+            print("State cache reset required after repair.")
+        else:
+            print("No missing session_index.jsonl entries found.")
+        if skipped_without_id:
+            print(f"Skipped rollout files without session id: {skipped_without_id}")
+        return 0
+
+    try:
+        result = repair_session_index(
+            codex_home=codex_home,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+            use_cache=not args.no_cache,
+            rebuild_cache=args.rebuild_cache,
+        )
+    except (CliError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+
+    for warning in result.warnings:
+        print(
+            encode_for_output(f"Warning: {warning}", sys.stderr.encoding),
+            file=sys.stderr,
+        )
+    print(f"Added session_index.jsonl entries: {len(result.candidates)}")
+    if result.candidates:
+        print("Added:")
+        for candidate in result.candidates:
+            print(encode_for_output(format_repair_index_candidate(candidate), sys.stdout.encoding))
+        if result.session_index_backup_path is not None:
+            print(f"Session index backup: {result.session_index_backup_path}")
+        if result.state_cache_backups:
+            print("State cache backups:")
+            for backup in result.state_cache_backups:
+                print(f"{backup.original_path} -> {backup.backup_path}")
+        else:
+            print("No Codex state cache files found to reset.")
+    else:
+        print("No missing session_index.jsonl entries found.")
+    if result.skipped_without_id:
+        print(f"Skipped rollout files without session id: {result.skipped_without_id}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     prog = cli_prog_from_argv0()
@@ -2801,6 +3184,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_list_command(parse_list_args(raw_argv[1:], prog))
     if raw_argv[:1] in (["find"], ["grep"]):
         return run_search_command(parse_search_args(raw_argv[0], raw_argv[1:], prog))
+    if raw_argv[:1] == ["repair-index"]:
+        return run_repair_index_command(parse_repair_index_args(raw_argv[1:], prog))
 
     args = parse_args(raw_argv, prog)
     codex_home = args.codex_home.expanduser().resolve()

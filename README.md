@@ -146,6 +146,24 @@ Use a specific Codex home directory:
 codex-sessions list --codex-home ~/.codex
 ```
 
+Preview missing `session_index.jsonl` entries inferred from rollout files:
+
+```bash
+codex-sessions repair-index --dry-run
+```
+
+Apply those repairs:
+
+```bash
+codex-sessions repair-index
+```
+
+`repair-index --dry-run` does not modify Codex state. The real repair command
+backs up `session_index.jsonl`, appends missing entries, and resets Codex state
+cache by renaming root `state_*.sqlite*` files to timestamped backups. If state
+cache reset fails, the index write is rolled back; close all Codex sessions and
+retry.
+
 Search all Codex sessions:
 
 ```bash

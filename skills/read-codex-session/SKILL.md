@@ -74,6 +74,17 @@ groups results by session, and caches extracted text under
 `$CODEX_HOME/cache/codex-sessions/`. Use raw `rg` only for narrow file-format
 checks or when searching fields not covered by `find`.
 
+If `list` or `find` shows `NO ENTRY IN session_index.jsonl`, inspect proposed
+index repairs with:
+
+```bash
+codex-sessions repair-index --dry-run
+```
+
+Run `codex-sessions repair-index` only when the user wants to modify Codex
+state. It backs up `session_index.jsonl` and renames root `state_*.sqlite*`
+files so Codex rebuilds its state cache.
+
 ## Manual Fallback
 
 If the helper is unavailable, run `codex-sessions` directly:

@@ -832,6 +832,39 @@ class ConverterTests(unittest.TestCase):
             self.assertIn("Please sync this session to the Mac.", lines[0])
             self.assertNotIn("environment_context", lines[0])
 
+    def test_list_sessions_infers_title_from_request_inside_ide_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            session_id = "89898989-8989-8989-8989-898989898989"
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": (
+                                "# Context from my IDE setup:\n\n"
+                                "## Active file: converter.py\n\n"
+                                "## My request for Codex:\n"
+                                "Please repair the index title."
+                            ),
+                        },
+                    }
+                ],
+            )
+
+            lines = list_session_lines(codex_home)
+
+            self.assertEqual(len(lines), 1)
+            self.assertIn("Please repair the index title.", lines[0])
+            self.assertNotIn("Context from my IDE setup", lines[0])
+
     def test_list_sessions_reuses_cached_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
@@ -963,6 +996,197 @@ class ConverterTests(unittest.TestCase):
                 buffer.getvalue().splitlines(),
                 [f"{session_id} - CLI list - NO ROLLOUT FILE"],
             )
+
+    def test_repair_index_dry_run_reports_missing_entries_without_modifying_index(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            indexed_id = "56565656-5656-5656-5656-565656565656"
+            missing_id = "67676767-6767-6767-6767-676767676767"
+            index_path = codex_home / "session_index.jsonl"
+            write_jsonl(
+                index_path,
+                [{"id": indexed_id, "thread_name": "Already indexed"}],
+            )
+            original_index = index_path.read_text(encoding="utf-8")
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-20-39-{indexed_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "Already indexed message",
+                        },
+                    }
+                ],
+            )
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-21-39-{missing_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:21:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "Repair the missing index entry. More details.",
+                        },
+                    }
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["repair-index", "--dry-run", "--codex-home", str(codex_home)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertEqual(index_path.read_text(encoding="utf-8"), original_index)
+            self.assertIn("Missing session_index.jsonl entries: 1", output)
+            self.assertIn("Would add:", output)
+            self.assertIn(f"{missing_id} - Repair the missing index entry.", output)
+            self.assertIn("2026/04/30/rollout-2026-04-30T18-21-39-", output)
+            self.assertIn("updated_at: 2026-04-30T18:21:39+00:00", output)
+            self.assertIn("State cache reset required after repair.", output)
+            self.assertNotIn(indexed_id, output)
+
+    def test_repair_index_dry_run_reports_no_missing_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            session_id = "78787878-7878-7878-7878-787878787878"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Already indexed"}],
+            )
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "Already indexed message",
+                        },
+                    }
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["repair-index", "--dry-run", "--codex-home", str(codex_home)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("Missing session_index.jsonl entries: 0", output)
+            self.assertIn("No missing session_index.jsonl entries found.", output)
+            self.assertNotIn("State cache reset required", output)
+
+    def test_repair_index_adds_entries_and_resets_state_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            missing_id = "89898989-8989-8989-8989-898989898989"
+            index_path = codex_home / "session_index.jsonl"
+            write_jsonl(index_path, [{"id": "11111111-1111-1111-1111-111111111111"}])
+            original_index = index_path.read_text(encoding="utf-8")
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-21-39-{missing_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:21:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "Repair the real index entry.",
+                        },
+                    }
+                ],
+            )
+            state_db = codex_home / "state_5.sqlite"
+            state_wal = codex_home / "state_5.sqlite-wal"
+            logs_db = codex_home / "logs_2.sqlite"
+            state_db.write_text("state", encoding="utf-8")
+            state_wal.write_text("wal", encoding="utf-8")
+            logs_db.write_text("logs", encoding="utf-8")
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["repair-index", "--codex-home", str(codex_home)])
+
+            output = buffer.getvalue()
+            index_records = [
+                json.loads(line)
+                for line in index_path.read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            self.assertEqual(result, 0)
+            self.assertIn("Added session_index.jsonl entries: 1", output)
+            self.assertIn("Session index backup:", output)
+            self.assertIn("State cache backups:", output)
+            self.assertEqual(index_records[-1]["id"], missing_id)
+            self.assertEqual(index_records[-1]["thread_name"], "Repair the real index entry.")
+            self.assertEqual(index_records[-1]["updated_at"], "2026-04-30T18:21:39Z")
+            self.assertFalse(state_db.exists())
+            self.assertFalse(state_wal.exists())
+            self.assertTrue(logs_db.exists())
+            state_backups = sorted(codex_home.glob("state_5.sqlite.backup-*"))
+            wal_backups = sorted(codex_home.glob("state_5.sqlite-wal.backup-*"))
+            index_backups = sorted(codex_home.glob("session_index.jsonl.backup-*"))
+            self.assertEqual(len(state_backups), 1)
+            self.assertEqual(len(wal_backups), 1)
+            self.assertEqual(len(index_backups), 1)
+            self.assertEqual(index_backups[0].read_text(encoding="utf-8"), original_index)
+
+    def test_repair_index_rolls_back_index_when_state_reset_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            missing_id = "90909090-9090-9090-9090-909090909090"
+            index_path = codex_home / "session_index.jsonl"
+            write_jsonl(index_path, [{"id": "11111111-1111-1111-1111-111111111111"}])
+            original_index = index_path.read_text(encoding="utf-8")
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-21-39-{missing_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:21:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "Rollback the failed repair.",
+                        },
+                    }
+                ],
+            )
+
+            with patch(
+                "codex_sessions_converter.converter.reset_codex_state_cache",
+                side_effect=OSError("locked"),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    main(["repair-index", "--codex-home", str(codex_home)])
+
+            self.assertIn("Rolled back session_index.jsonl", str(raised.exception))
+            self.assertEqual(index_path.read_text(encoding="utf-8"), original_index)
+            self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
 
     def test_find_searches_deserialized_text_and_groups_by_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
