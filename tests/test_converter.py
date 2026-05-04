@@ -865,6 +865,38 @@ class ConverterTests(unittest.TestCase):
             self.assertIn("Please repair the index title.", lines[0])
             self.assertNotIn("Context from my IDE setup", lines[0])
 
+    def test_list_sessions_infers_title_from_event_message_ide_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            session_id = "bcbcbcbc-bcbc-bcbc-bcbc-bcbcbcbcbcbc"
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "user_message",
+                            "message": (
+                                "# Context from my IDE setup:\n\n"
+                                "## Active file: converter.py\n\n"
+                                "## My request for Codex:\n"
+                                "Please title this event message."
+                            ),
+                        },
+                    }
+                ],
+            )
+
+            lines = list_session_lines(codex_home)
+
+            self.assertEqual(len(lines), 1)
+            self.assertIn("Please title this event message.", lines[0])
+            self.assertNotIn("Context from my IDE setup", lines[0])
+
     def test_list_sessions_reuses_cached_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
@@ -1716,6 +1748,53 @@ class ConverterTests(unittest.TestCase):
 
             self.assertEqual(second_result, 0)
             self.assertIn("cached needle", buffer.getvalue())
+
+    def test_find_ignores_stale_search_cache_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            session_id = "cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd"
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": "fresh needle",
+                        },
+                    }
+                ],
+            )
+            cache_path = search_cache_path(codex_home)
+            cache_path.parent.mkdir(parents=True)
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "entries": {
+                            "stale": {
+                                "path": str((sessions_day / "missing.jsonl").resolve()),
+                                "visible_lines": ["Codex: stale needle"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["find", "needle", "--codex-home", str(codex_home)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("fresh needle", output)
+            self.assertNotIn("stale needle", output)
 
     def test_find_invalidates_cache_when_rollout_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

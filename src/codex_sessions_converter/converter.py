@@ -31,8 +31,8 @@ NO_SESSION_INDEX_ENTRY = "NO ENTRY IN session_index.jsonl"
 MARKDOWN_FEATURES = {"tools", "metadata", "raw"}
 MARKDOWN_TOOL_MODES = {"auto", "none", "names", "smart", "preview", "full"}
 MARKDOWN_IMAGE_MODES = {"truncate", "extract", "inline"}
-SEARCH_CACHE_VERSION = 1
-SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v1.json"
+SEARCH_CACHE_VERSION = 2
+SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v2.json"
 DEFAULT_TOOL_PREVIEW_CHARS = 700
 DATA_IMAGE_PREFIX_CHARS = 24
 MAX_MATCHES_BEFORE_LINE_OMISSION = 2
@@ -1028,7 +1028,10 @@ def render_search_line_groups(record: dict[str, Any]) -> list[tuple[str, list[st
     if record_type == "event_msg" and isinstance(payload, dict):
         payload_type = payload.get("type")
         if payload_type == "user_message":
-            return [("visible", render_labeled_search_lines("User", payload.get("message", "")))]
+            searchable_text = searchable_user_message_text(str(payload.get("message", "")))
+            if searchable_text:
+                return [("visible", render_labeled_search_lines("User", searchable_text))]
+            return []
         if payload_type == "agent_message":
             return [("visible", render_labeled_search_lines("Codex", payload.get("message", "")))]
 

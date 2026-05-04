@@ -202,7 +202,7 @@ terminal, including Git Bash/MSYS terminals on Windows. Use `--color always` or
 `--color never` to override auto-detection.
 
 Search caches extracted searchable text under
-`~/.codex/cache/codex-sessions/search-v1.json` and invalidates entries when the
+`~/.codex/cache/codex-sessions/search-v2.json` and invalidates entries when the
 source rollout file size or modification time changes. Use `--rebuild-cache` to
 refresh cached entries, or `--no-cache` for a one-off uncached search.
 `list` uses the same cache for rollout metadata and inferred titles.
