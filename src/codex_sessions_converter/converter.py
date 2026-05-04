@@ -7,7 +7,6 @@ import json
 import math
 import os
 import re
-import shutil
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -18,6 +17,18 @@ from urllib.parse import quote
 
 from rich.console import Console
 from rich.text import Text
+
+from codex_sessions_converter.codex_state import (
+    CodexStateError,
+    StateCacheBackup,
+    backup_dir_for,
+    backup_label,
+    backup_session_index,
+    remove_backup_dir_if_empty,
+    reset_codex_state_cache,
+    restore_session_index_backup,
+    temp_path_for,
+)
 
 __version__ = "0.1.0"
 
@@ -153,16 +164,20 @@ class RepairIndexCandidate:
 
 
 @dataclass(frozen=True)
-class StateCacheBackup:
-    original_path: Path
-    backup_path: Path
-
-
-@dataclass(frozen=True)
 class RepairIndexResult:
     candidates: tuple[RepairIndexCandidate, ...]
     warnings: tuple[str, ...]
     skipped_without_id: int
+    session_index_backup_path: Path | None
+    state_cache_backups: tuple[StateCacheBackup, ...]
+
+
+@dataclass(frozen=True)
+class RenameSessionResult:
+    session_id: str
+    old_thread_name: str
+    new_thread_name: str
+    changed: bool
     session_index_backup_path: Path | None
     state_cache_backups: tuple[StateCacheBackup, ...]
 
@@ -357,6 +372,29 @@ def parse_repair_index_args(
     return parser.parse_args(argv)
 
 
+def parse_rename_args(
+    argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} rename",
+        description="Rename a session_index.jsonl entry and reset Codex state cache.",
+    )
+    parser.add_argument("target", help="Session ID or exact current session title.")
+    parser.add_argument("name", nargs="+", help="New session title.")
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=default_codex_home(),
+        help="Codex home directory. Defaults to CODEX_HOME or ~/.codex.",
+    )
+    parser.add_argument(
+        "--session-index",
+        type=Path,
+        help="Path to session_index.jsonl. Defaults to <codex-home>/session_index.jsonl.",
+    )
+    return parser.parse_args(argv)
+
+
 def parse_args(
     argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
 ) -> argparse.Namespace:
@@ -371,6 +409,7 @@ def parse_args(
             "  grep       alias for find\n\n"
             "  repair-index\n"
             "             inspect missing session_index.jsonl entries\n\n"
+            "  rename     rename a session_index.jsonl entry\n\n"
             "Markdown include presets:\n"
             "  dialogue   visible user/Codex messages, reasoning, progress messages\n"
             "  default    dialogue plus tool calls and tool outputs\n"
@@ -1681,33 +1720,6 @@ def session_index_record_for_candidate(candidate: RepairIndexCandidate) -> dict[
     }
 
 
-def backup_label() -> str:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return f"{timestamp}-{os.getpid()}"
-
-
-def backup_path_for(path: Path, label: str) -> Path:
-    return path.with_name(f"{path.name}.backup-{label}")
-
-
-def temp_path_for(path: Path) -> Path:
-    return path.with_name(f"{path.name}.{os.getpid()}.tmp")
-
-
-def backup_session_index(index_path: Path, label: str) -> Path | None:
-    if not index_path.exists():
-        return None
-    backup_path = backup_path_for(index_path, label)
-    shutil.copy2(index_path, backup_path)
-    if backup_path.read_bytes() != index_path.read_bytes():
-        try:
-            backup_path.unlink()
-        except OSError:
-            pass
-        raise CliError(f"Could not verify session index backup: {backup_path}")
-    return backup_path
-
-
 def append_session_index_records(
     index_path: Path, candidates: Sequence[RepairIndexCandidate]
 ) -> None:
@@ -1728,54 +1740,132 @@ def append_session_index_records(
     temp_path.replace(index_path)
 
 
-def restore_session_index_backup(index_path: Path, backup_path: Path | None) -> None:
-    if backup_path is None:
+def session_index_records(index_path: Path) -> list[Any]:
+    if not index_path.exists():
+        raise CliError(f"session_index.jsonl not found: {index_path}")
+    return [record for _, record in iter_concatenated_json_objects(index_path)]
+
+
+def write_session_index_records(index_path: Path, records: Sequence[Any]) -> None:
+    serialized = "".join(
+        json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in records
+    )
+    temp_path = temp_path_for(index_path)
+    temp_path.write_text(serialized, encoding="utf-8")
+    temp_path.replace(index_path)
+
+
+def session_index_record_id(record: Mapping[str, Any]) -> str | None:
+    session_id = record.get("id")
+    return session_id if isinstance(session_id, str) and session_id else None
+
+
+def session_index_record_thread_name(record: Mapping[str, Any]) -> str:
+    thread_name = record.get("thread_name")
+    return thread_name if isinstance(thread_name, str) else ""
+
+
+def matching_session_index_records(
+    records: Sequence[Any], target: str
+) -> tuple[tuple[int, dict[str, Any]], ...]:
+    target_is_id = is_session_id(target)
+    matches: list[tuple[int, dict[str, Any]]] = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        session_id = session_index_record_id(record)
+        if session_id is None:
+            continue
+        if target_is_id:
+            if normalize_session_id(session_id) == normalize_session_id(target):
+                matches.append((index, record))
+        elif session_index_record_thread_name(record) == target:
+            matches.append((index, record))
+    return tuple(matches)
+
+
+def resolve_session_index_record(records: Sequence[Any], target: str) -> tuple[int, dict[str, Any]]:
+    matches = matching_session_index_records(records, target)
+    if len(matches) == 1:
+        return matches[0]
+
+    if not matches:
+        if is_session_id(target):
+            raise CliError(f"No session_index.jsonl entry found for ID: {target}")
+        raise CliError(f"No session_index.jsonl entry found for title: {target}")
+
+    rendered_matches = ", ".join(
+        session_index_record_id(record) or "<missing id>" for _, record in matches
+    )
+    if is_session_id(target):
+        raise CliError(
+            f"Multiple session_index.jsonl entries found for ID {target}: {rendered_matches}"
+        )
+    raise CliError(
+        f"Multiple session_index.jsonl entries matched title {target!r}: "
+        f"{rendered_matches}. Re-run with one ID."
+    )
+
+
+def rename_session_index_entry(
+    codex_home: Path,
+    session_index_path: Path | None,
+    target: str,
+    new_thread_name: str,
+) -> RenameSessionResult:
+    normalized_new_thread_name = new_thread_name.strip()
+    if not normalized_new_thread_name:
+        raise CliError("New session title must not be empty.")
+
+    index_path = session_index_path or codex_home / "session_index.jsonl"
+    records = session_index_records(index_path)
+    record_index, record = resolve_session_index_record(records, target)
+    session_id = session_index_record_id(record)
+    if session_id is None:
+        raise CliError(f"Matched session_index.jsonl entry has no session id: {target}")
+
+    old_thread_name = session_index_record_thread_name(record)
+    if old_thread_name == normalized_new_thread_name:
+        return RenameSessionResult(
+            session_id=session_id,
+            old_thread_name=old_thread_name,
+            new_thread_name=normalized_new_thread_name,
+            changed=False,
+            session_index_backup_path=None,
+            state_cache_backups=(),
+        )
+
+    updated_records = list(records)
+    updated_record = dict(record)
+    updated_record["thread_name"] = normalized_new_thread_name
+    updated_records[record_index] = updated_record
+
+    label = backup_label()
+    backup_dir = backup_dir_for(codex_home, label)
+    index_backup_path = backup_session_index(index_path, backup_dir)
+    try:
+        write_session_index_records(index_path, updated_records)
+        state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
+    except (CodexStateError, OSError) as exc:
         try:
-            index_path.unlink()
-        except FileNotFoundError:
-            pass
-        return
-    shutil.copy2(backup_path, index_path)
-    backup_path.unlink()
-
-
-def state_cache_files(codex_home: Path) -> list[Path]:
-    candidates = []
-    for path in codex_home.glob("state_*.sqlite*"):
-        if path.is_file():
-            candidates.append(path)
-    return sorted(candidates)
-
-
-def backup_state_cache_file(path: Path, label: str) -> StateCacheBackup:
-    backup_path = backup_path_for(path, label)
-    path.replace(backup_path)
-    if not backup_path.exists():
-        raise CliError(f"Could not verify state cache backup: {backup_path}")
-    return StateCacheBackup(original_path=path, backup_path=backup_path)
-
-
-def restore_state_cache_backups(backups: Sequence[StateCacheBackup]) -> None:
-    for backup in reversed(backups):
-        if backup.backup_path.exists() and not backup.original_path.exists():
-            backup.backup_path.replace(backup.original_path)
-
-
-def reset_codex_state_cache(codex_home: Path, label: str) -> tuple[StateCacheBackup, ...]:
-    backups: list[StateCacheBackup] = []
-    for path in state_cache_files(codex_home):
-        try:
-            backups.append(backup_state_cache_file(path, label))
-        except OSError as exc:
-            restore_state_cache_backups(backups)
+            restore_session_index_backup(index_path, index_backup_path)
+            remove_backup_dir_if_empty(backup_dir)
+        except OSError as restore_exc:
             raise CliError(
-                f"Could not reset Codex state cache file {path}: {exc}. "
-                "Close all Codex sessions and retry."
-            ) from exc
-        except CliError:
-            restore_state_cache_backups(backups)
-            raise
-    return tuple(backups)
+                f"{exc} Also failed to restore session_index.jsonl from backup: {restore_exc}"
+            ) from restore_exc
+        raise CliError(
+            f"{exc} Rolled back session_index.jsonl. Close all Codex sessions and retry."
+        ) from exc
+
+    return RenameSessionResult(
+        session_id=session_id,
+        old_thread_name=old_thread_name,
+        new_thread_name=normalized_new_thread_name,
+        changed=True,
+        session_index_backup_path=index_backup_path,
+        state_cache_backups=state_cache_backups,
+    )
 
 
 def repair_session_index(
@@ -1804,13 +1894,15 @@ def repair_session_index(
         )
 
     label = backup_label()
-    index_backup_path = backup_session_index(index_path, label)
+    backup_dir = backup_dir_for(codex_home, label)
+    index_backup_path = backup_session_index(index_path, backup_dir)
     try:
         append_session_index_records(index_path, candidates)
-        state_cache_backups = reset_codex_state_cache(codex_home, label)
-    except (CliError, OSError) as exc:
+        state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
+    except (CliError, CodexStateError, OSError) as exc:
         try:
             restore_session_index_backup(index_path, index_backup_path)
+            remove_backup_dir_if_empty(backup_dir)
         except OSError as restore_exc:
             raise CliError(
                 f"{exc} Also failed to restore session_index.jsonl from backup: {restore_exc}"
@@ -3152,7 +3244,7 @@ def run_repair_index_command(args: argparse.Namespace) -> int:
             use_cache=not args.no_cache,
             rebuild_cache=args.rebuild_cache,
         )
-    except (CliError, ValueError) as exc:
+    except (CliError, CodexStateError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 
     for warning in result.warnings:
@@ -3180,6 +3272,48 @@ def run_repair_index_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_rename_command(args: argparse.Namespace) -> int:
+    codex_home = args.codex_home.expanduser().resolve()
+    session_index_path = (
+        args.session_index.expanduser().resolve()
+        if args.session_index
+        else codex_home / "session_index.jsonl"
+    )
+    new_thread_name = " ".join(args.name).strip()
+
+    try:
+        result = rename_session_index_entry(
+            codex_home=codex_home,
+            session_index_path=session_index_path,
+            target=args.target,
+            new_thread_name=new_thread_name,
+        )
+    except (CliError, CodexStateError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+
+    if not result.changed:
+        print(
+            encode_for_output(
+                f"Session title already set: {result.session_id} - {result.new_thread_name}",
+                sys.stdout.encoding,
+            )
+        )
+        return 0
+
+    print(encode_for_output(f"Renamed session: {result.session_id}", sys.stdout.encoding))
+    print(encode_for_output(f"From: {result.old_thread_name}", sys.stdout.encoding))
+    print(encode_for_output(f"To: {result.new_thread_name}", sys.stdout.encoding))
+    if result.session_index_backup_path is not None:
+        print(f"Session index backup: {result.session_index_backup_path}")
+    if result.state_cache_backups:
+        print("State cache backups:")
+        for backup in result.state_cache_backups:
+            print(f"{backup.original_path} -> {backup.backup_path}")
+    else:
+        print("No Codex state cache files found to reset.")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     prog = cli_prog_from_argv0()
@@ -3189,6 +3323,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_search_command(parse_search_args(raw_argv[0], raw_argv[1:], prog))
     if raw_argv[:1] == ["repair-index"]:
         return run_repair_index_command(parse_repair_index_args(raw_argv[1:], prog))
+    if raw_argv[:1] == ["rename"]:
+        return run_rename_command(parse_rename_args(raw_argv[1:], prog))
 
     args = parse_args(raw_argv, prog)
     codex_home = args.codex_home.expanduser().resolve()

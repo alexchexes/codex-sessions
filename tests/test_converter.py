@@ -1176,13 +1176,20 @@ class ConverterTests(unittest.TestCase):
             self.assertFalse(state_db.exists())
             self.assertFalse(state_wal.exists())
             self.assertTrue(logs_db.exists())
-            state_backups = sorted(codex_home.glob("state_5.sqlite.backup-*"))
-            wal_backups = sorted(codex_home.glob("state_5.sqlite-wal.backup-*"))
-            index_backups = sorted(codex_home.glob("session_index.jsonl.backup-*"))
-            self.assertEqual(len(state_backups), 1)
-            self.assertEqual(len(wal_backups), 1)
-            self.assertEqual(len(index_backups), 1)
-            self.assertEqual(index_backups[0].read_text(encoding="utf-8"), original_index)
+            backup_dirs = sorted((codex_home / "backups" / "codex-sessions").iterdir())
+            self.assertEqual(len(backup_dirs), 1)
+            backup_dir = backup_dirs[0]
+            self.assertEqual(
+                (backup_dir / "session_index.jsonl").read_text(encoding="utf-8"),
+                original_index,
+            )
+            self.assertEqual((backup_dir / "state_5.sqlite").read_text(encoding="utf-8"), "state")
+            self.assertEqual(
+                (backup_dir / "state_5.sqlite-wal").read_text(encoding="utf-8"),
+                "wal",
+            )
+            self.assertEqual(list(codex_home.glob("state_5.sqlite.backup-*")), [])
+            self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
 
     def test_repair_index_rolls_back_index_when_state_reset_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1219,6 +1226,137 @@ class ConverterTests(unittest.TestCase):
             self.assertIn("Rolled back session_index.jsonl", str(raised.exception))
             self.assertEqual(index_path.read_text(encoding="utf-8"), original_index)
             self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
+            self.assertEqual(
+                list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl")),
+                [],
+            )
+
+    def test_rename_updates_index_and_resets_state_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            session_id = "12121212-1212-1212-1212-121212121212"
+            index_path = codex_home / "session_index.jsonl"
+            write_jsonl(
+                index_path,
+                [
+                    {
+                        "id": session_id,
+                        "thread_name": "Old title",
+                        "updated_at": "2026-04-30T18:21:39Z",
+                        "extra": "preserved",
+                    }
+                ],
+            )
+            original_index = index_path.read_text(encoding="utf-8")
+            state_db = codex_home / "state_5.sqlite"
+            state_db.write_text("state", encoding="utf-8")
+            previous_backup = codex_home / "state_5.sqlite.backup-20260504-112050-16164"
+            previous_backup.write_text("previous backup", encoding="utf-8")
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(
+                    [
+                        "rename",
+                        "--codex-home",
+                        str(codex_home),
+                        session_id,
+                        "New",
+                        "title",
+                    ]
+                )
+
+            output = buffer.getvalue()
+            index_records = [
+                json.loads(line)
+                for line in index_path.read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            self.assertEqual(result, 0)
+            self.assertIn(f"Renamed session: {session_id}", output)
+            self.assertIn("From: Old title", output)
+            self.assertIn("To: New title", output)
+            self.assertIn("Session index backup:", output)
+            self.assertIn("State cache backups:", output)
+            self.assertEqual(index_records[0]["thread_name"], "New title")
+            self.assertEqual(index_records[0]["updated_at"], "2026-04-30T18:21:39Z")
+            self.assertEqual(index_records[0]["extra"], "preserved")
+            self.assertFalse(state_db.exists())
+            backup_dirs = sorted((codex_home / "backups" / "codex-sessions").iterdir())
+            self.assertEqual(len(backup_dirs), 1)
+            backup_dir = backup_dirs[0]
+            self.assertEqual(
+                (backup_dir / "session_index.jsonl").read_text(encoding="utf-8"),
+                original_index,
+            )
+            self.assertEqual((backup_dir / "state_5.sqlite").read_text(encoding="utf-8"), "state")
+            self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
+            self.assertTrue(previous_backup.exists())
+            self.assertEqual(previous_backup.read_text(encoding="utf-8"), "previous backup")
+            self.assertEqual(
+                list(codex_home.glob("state_5.sqlite.backup-*.backup-*")),
+                [],
+            )
+
+    def test_rename_accepts_exact_existing_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            session_id = "13131313-1313-1313-1313-131313131313"
+            index_path = codex_home / "session_index.jsonl"
+            write_jsonl(
+                index_path,
+                [{"id": session_id, "thread_name": "Old exact title"}],
+            )
+
+            with redirect_stdout(StringIO()):
+                result = main(
+                    [
+                        "rename",
+                        "--codex-home",
+                        str(codex_home),
+                        "Old exact title",
+                        "New exact title",
+                    ]
+                )
+
+            index_records = [
+                json.loads(line)
+                for line in index_path.read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            self.assertEqual(result, 0)
+            self.assertEqual(index_records[0]["thread_name"], "New exact title")
+
+    def test_rename_rolls_back_index_when_state_reset_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            session_id = "14141414-1414-1414-1414-141414141414"
+            index_path = codex_home / "session_index.jsonl"
+            write_jsonl(index_path, [{"id": session_id, "thread_name": "Old title"}])
+            original_index = index_path.read_text(encoding="utf-8")
+
+            with patch(
+                "codex_sessions_converter.converter.reset_codex_state_cache",
+                side_effect=OSError("locked"),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    main(
+                        [
+                            "rename",
+                            "--codex-home",
+                            str(codex_home),
+                            session_id,
+                            "New title",
+                        ]
+                    )
+
+            self.assertIn("Rolled back session_index.jsonl", str(raised.exception))
+            self.assertEqual(index_path.read_text(encoding="utf-8"), original_index)
+            self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
+            self.assertEqual(
+                list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl")),
+                [],
+            )
 
     def test_find_searches_deserialized_text_and_groups_by_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

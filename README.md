@@ -159,10 +159,21 @@ codex-sessions repair-index
 ```
 
 `repair-index --dry-run` does not modify Codex state. The real repair command
-backs up `session_index.jsonl`, appends missing entries, and resets Codex state
-cache by renaming root `state_*.sqlite*` files to timestamped backups. If state
-cache reset fails, the index write is rolled back; close all Codex sessions and
-retry.
+backs up `session_index.jsonl` under `backups/codex-sessions/`, appends missing
+entries, and resets Codex state cache by moving root `state_*.sqlite*` files
+into the same backup folder. If state cache reset fails, the index write is
+rolled back; close all Codex sessions and retry.
+
+Rename a session in `session_index.jsonl`:
+
+```bash
+codex-sessions rename 019dd5ce-19e1-78c3-9313-325228ddd983 "Better session title"
+```
+
+`rename` also backs up `session_index.jsonl` under `backups/codex-sessions/` and
+resets Codex state cache. You can use an exact current title instead of an ID,
+but if multiple sessions have that title the command will ask you to rerun with
+one concrete ID.
 
 Search all Codex sessions:
 
@@ -313,4 +324,5 @@ Run formatting, linting, and type checks:
 python -m ruff format .
 python -m ruff check .
 python -m mypy
+npx --yes pyright
 ```
