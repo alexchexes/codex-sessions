@@ -176,6 +176,29 @@ resets Codex state cache. You can use an exact current title instead of an ID,
 but if multiple sessions have that title the command will ask you to rerun with
 one concrete ID.
 
+Export one session as a transferable rollout JSONL file:
+
+```bash
+codex-sessions export 019ddf68-2bc0-75e2-aecb-22f49ca63c98 ./exports/
+```
+
+The exported filename is readable by default:
+
+```text
+2026-04-30--Fix-auto-parametrization-bug--019ddf68-2bc0-75e2-aecb-22f49ca63c98.jsonl
+```
+
+You can also use an exact current title or write to a specific file path:
+
+```bash
+codex-sessions export "Fix auto parametrization bug" ./session.jsonl
+```
+
+`export` writes a rollout copy without changing Codex state. If the current
+`session_index.jsonl` title differs from the rollout title event, the exported
+copy is updated so `import` can preserve that title on another machine. Existing
+output files are refused unless `--force` is passed.
+
 Import a bare rollout JSONL file into Codex home:
 
 ```bash

@@ -53,6 +53,7 @@ MAX_MATCHES_BEFORE_LINE_OMISSION = 2
 MAX_VISIBLE_MATCHES_PER_OMITTED_LINE = 1
 MAX_INFERRED_TITLE_CHARS = 80
 MAX_INFERRED_TITLE_WORDS = 12
+MAX_EXPORT_TITLE_SLUG_CHARS = 80
 DATA_IMAGE_URL_RE = re.compile(r"^data:(image/[A-Za-z0-9.+-]+);base64,(.*)$", re.DOTALL)
 ROLLOUT_FILENAME_DATE_RE = re.compile(r"^rollout-(\d{4})-(\d{2})-(\d{2})T")
 IMAGE_EXTENSION_BY_MIME_TYPE = {
@@ -218,6 +219,23 @@ class ImportSessionResult:
     plan: ImportSessionPlan
     session_index_backup_path: Path | None
     state_cache_backups: tuple[StateCacheBackup, ...]
+
+
+@dataclass(frozen=True)
+class ExportSessionPlan:
+    source_path: Path
+    output_path: Path
+    session_id: str
+    thread_name: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    rollout_will_be_rewritten: bool
+    overwrite: bool
+
+
+@dataclass(frozen=True)
+class ExportSessionResult:
+    plan: ExportSessionPlan
 
 
 class CliError(Exception):
@@ -471,6 +489,51 @@ def parse_import_args(
     return parser.parse_args(argv)
 
 
+def parse_export_args(
+    argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} export",
+        description="Export one Codex session as a transferable rollout JSONL file.",
+    )
+    parser.add_argument("target", help="Session ID or exact session title to export.")
+    parser.add_argument(
+        "output",
+        nargs="?",
+        type=Path,
+        help=(
+            "Output .jsonl path or directory. Defaults to a readable file in the current directory."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output file if it already exists.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show the export plan without writing anything.",
+    )
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=default_codex_home(),
+        help="Codex home directory. Defaults to CODEX_HOME or ~/.codex.",
+    )
+    parser.add_argument(
+        "--session-index",
+        type=Path,
+        help="Path to session_index.jsonl. Defaults to <codex-home>/session_index.jsonl.",
+    )
+    parser.add_argument(
+        "--sessions-dir",
+        type=Path,
+        help="Path to Codex sessions directory. Defaults to <codex-home>/sessions.",
+    )
+    return parser.parse_args(argv)
+
+
 def parse_args(
     argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
 ) -> argparse.Namespace:
@@ -487,6 +550,7 @@ def parse_args(
             "             inspect missing session_index.jsonl entries\n\n"
             "  rename     rename a session_index.jsonl entry\n\n"
             "  import     import a bare rollout JSONL file\n\n"
+            "  export     export one session as a rollout JSONL file\n\n"
             "Markdown include presets:\n"
             "  dialogue   visible user/Codex messages, reasoning, progress messages\n"
             "  default    dialogue plus tool calls and tool outputs\n"
@@ -1506,6 +1570,161 @@ def import_bare_rollout(
         session_index_backup_path=index_backup_path,
         state_cache_backups=state_cache_backups,
     )
+
+
+def export_title_slug(thread_name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", thread_name).strip("-")
+    if not slug:
+        return "session"
+    return slug[:MAX_EXPORT_TITLE_SLUG_CHARS].rstrip("-") or "session"
+
+
+def export_filename_date(source_path: Path, document: SearchDocument) -> str:
+    filename_date = rollout_filename_date(source_path)
+    if filename_date is not None:
+        return "-".join(filename_date)
+    if document.started_at is not None:
+        return document.started_at.astimezone().strftime("%Y-%m-%d")
+    return "unknown-date"
+
+
+def default_export_filename(
+    source_path: Path, document: SearchDocument, session_id: str, thread_name: str
+) -> str:
+    return (
+        f"{export_filename_date(source_path, document)}--"
+        f"{export_title_slug(thread_name)}--{session_id}.jsonl"
+    )
+
+
+def output_arg_looks_like_directory(raw_output: Path) -> bool:
+    raw_output_text = str(raw_output)
+    return raw_output_text.endswith(("/", "\\")) or raw_output.suffix == ""
+
+
+def resolve_export_output_path(raw_output: Path | None, default_filename: str) -> Path:
+    if raw_output is None:
+        return Path.cwd() / default_filename
+    output_path = raw_output.expanduser()
+    if output_path.exists() and output_path.is_dir():
+        return output_path / default_filename
+    if not output_path.exists() and output_arg_looks_like_directory(raw_output):
+        return output_path / default_filename
+    return output_path
+
+
+def resolve_single_session_file_for_export(session_id: str, sessions_dir: Path) -> SessionFile:
+    matches = existing_session_files_for_id(session_id, sessions_dir)
+    if not matches:
+        raise CliError(f"No Codex session file found for ID: {session_id}")
+    if len(matches) > 1:
+        rendered_matches = ", ".join(session_file.relative_path for session_file in matches)
+        raise CliError(
+            f"Multiple Codex session files found for ID {session_id}: {rendered_matches}"
+        )
+    return matches[0]
+
+
+def export_session_index_record(
+    target: str, index_path: Path
+) -> tuple[str | None, dict[str, Any] | None]:
+    if is_session_id(target):
+        if not index_path.exists():
+            return target, None
+        records = session_index_records(index_path)
+        match = existing_index_record_for_id(records, target)
+        if match is None:
+            return target, None
+        record_id = session_index_record_id(match[1])
+        return record_id or target, match[1]
+
+    records = session_index_records(index_path)
+    _, record = resolve_session_index_record(records, target)
+    session_id = session_index_record_id(record)
+    if session_id is None:
+        raise CliError(f"Matched session_index.jsonl entry has no session id: {target}")
+    return session_id, record
+
+
+def plan_session_export(
+    target: str,
+    codex_home: Path,
+    output: Path | None = None,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    *,
+    force: bool = False,
+) -> ExportSessionPlan:
+    resolved_sessions_dir = sessions_dir or codex_home / "sessions"
+    if not resolved_sessions_dir.exists():
+        raise CliError(f"Sessions directory not found: {resolved_sessions_dir}")
+
+    index_path = session_index_path or codex_home / "session_index.jsonl"
+    session_id, index_record = export_session_index_record(target, index_path)
+    if session_id is None:
+        raise CliError(f"Could not resolve session ID for export target: {target}")
+
+    session_file = resolve_single_session_file_for_export(session_id, resolved_sessions_dir)
+    source_path = session_file.path.resolve()
+    document = build_search_document(source_path, "...")
+    resolved_session_id = document.session_id or session_file.session_id or session_id
+    index_thread_name = (
+        session_index_record_thread_name(index_record) if index_record is not None else ""
+    )
+    thread_name = index_thread_name or inferred_thread_name(document)
+    if not thread_name:
+        raise CliError("Exported session title must not be empty.")
+
+    _, rollout_will_be_rewritten = prepare_import_rollout_records(
+        source_path, resolved_session_id, thread_name
+    )
+    output_path = resolve_export_output_path(
+        output, default_export_filename(source_path, document, resolved_session_id, thread_name)
+    )
+    if output_path.exists():
+        if output_path.resolve() == source_path:
+            raise CliError(f"Export output path is the source rollout file: {output_path}")
+        if not force:
+            raise CliError(f"Output file already exists: {output_path}. Use --force to overwrite.")
+
+    return ExportSessionPlan(
+        source_path=source_path,
+        output_path=output_path,
+        session_id=resolved_session_id,
+        thread_name=thread_name,
+        started_at=document.started_at,
+        ended_at=document.ended_at,
+        rollout_will_be_rewritten=rollout_will_be_rewritten,
+        overwrite=output_path.exists(),
+    )
+
+
+def export_session(
+    target: str,
+    codex_home: Path,
+    output: Path | None = None,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    *,
+    force: bool = False,
+) -> ExportSessionResult:
+    plan = plan_session_export(
+        target=target,
+        codex_home=codex_home,
+        output=output,
+        session_index_path=session_index_path,
+        sessions_dir=sessions_dir,
+        force=force,
+    )
+    plan.output_path.parent.mkdir(parents=True, exist_ok=True)
+    if plan.rollout_will_be_rewritten:
+        records, _ = prepare_import_rollout_records(
+            plan.source_path, plan.session_id, plan.thread_name
+        )
+        write_rollout_records(plan.output_path, records)
+    else:
+        shutil.copy2(plan.source_path, plan.output_path)
+    return ExportSessionResult(plan=plan)
 
 
 def first_inferred_title_with_prefix(lines: Sequence[str], prefix: str) -> str | None:
@@ -3943,6 +4162,87 @@ def run_import_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def export_rollout_action_label(plan: ExportSessionPlan) -> str:
+    if plan.rollout_will_be_rewritten:
+        return "copy with rollout title event update"
+    return "copy unchanged"
+
+
+def format_export_plan_lines(plan: ExportSessionPlan) -> list[str]:
+    lines = [
+        f"Export source: {plan.source_path}",
+        f"Session: {plan.session_id} - {plan.thread_name}",
+        (
+            "Started: "
+            f"{format_local_timestamp(plan.started_at)} - "
+            f"Updated: {format_local_timestamp(plan.ended_at)} "
+            f"({local_timezone_offset_label(plan.ended_at or plan.started_at)})"
+        ),
+        f"Output rollout: {plan.output_path}",
+        f"Rollout action: {export_rollout_action_label(plan)}",
+    ]
+    if plan.overwrite:
+        lines.append("Overwrite: yes")
+    return lines
+
+
+def run_export_command(args: argparse.Namespace) -> int:
+    codex_home = args.codex_home.expanduser().resolve()
+    session_index_path = (
+        args.session_index.expanduser().resolve()
+        if args.session_index
+        else codex_home / "session_index.jsonl"
+    )
+    sessions_dir = (
+        args.sessions_dir.expanduser().resolve() if args.sessions_dir else codex_home / "sessions"
+    )
+
+    if args.dry_run:
+        try:
+            plan = plan_session_export(
+                target=args.target,
+                codex_home=codex_home,
+                output=args.output,
+                session_index_path=session_index_path,
+                sessions_dir=sessions_dir,
+                force=args.force,
+            )
+        except (CliError, ValueError) as exc:
+            raise SystemExit(str(exc)) from exc
+        for line in format_export_plan_lines(plan):
+            print(encode_for_output(line, sys.stdout.encoding))
+        return 0
+
+    try:
+        result = export_session(
+            target=args.target,
+            codex_home=codex_home,
+            output=args.output,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+            force=args.force,
+        )
+    except (CliError, ValueError, OSError) as exc:
+        raise SystemExit(str(exc)) from exc
+
+    plan = result.plan
+    print(
+        encode_for_output(
+            f"Exported session: {plan.session_id} - {plan.thread_name}",
+            sys.stdout.encoding,
+        )
+    )
+    print(
+        encode_for_output(f"Rollout: {plan.source_path} -> {plan.output_path}", sys.stdout.encoding)
+    )
+    print(
+        encode_for_output(
+            f"Rollout action: {export_rollout_action_label(plan)}", sys.stdout.encoding
+        )
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     prog = cli_prog_from_argv0()
@@ -3956,6 +4256,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_rename_command(parse_rename_args(raw_argv[1:], prog))
     if raw_argv[:1] == ["import"]:
         return run_import_command(parse_import_args(raw_argv[1:], prog))
+    if raw_argv[:1] == ["export"]:
+        return run_export_command(parse_export_args(raw_argv[1:], prog))
 
     args = parse_args(raw_argv, prog)
     codex_home = args.codex_home.expanduser().resolve()
