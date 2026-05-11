@@ -146,6 +146,7 @@ class SearchLine:
 @dataclass(frozen=True)
 class SearchResult:
     session_info: str
+    session_info_matches: tuple[tuple[int, int], ...]
     lines: tuple[SearchLine, ...]
     omitted_occurrence_count: int
 
@@ -1074,6 +1075,34 @@ def session_info_for_search(
     return format_unindexed_session_line(session_file, inferred_title)
 
 
+def session_title_for_search(
+    session_file: SessionFile,
+    entries_by_id: dict[str, SessionIndexEntry],
+    inferred_title: str | None = None,
+) -> str | None:
+    if session_file.session_id:
+        entry = entries_by_id.get(normalize_session_id(session_file.session_id))
+        if entry:
+            return entry.thread_name
+    return inferred_title
+
+
+def session_info_title_match_spans(
+    session_info: str,
+    title: str | None,
+    search_pattern: re.Pattern[str],
+) -> tuple[tuple[int, int], ...]:
+    if not title:
+        return ()
+    title_offset = session_info.rfind(title)
+    if title_offset == -1:
+        return ()
+    return tuple(
+        (title_offset + start, title_offset + end)
+        for start, end in match_spans(title, search_pattern)
+    )
+
+
 def parse_embedded_json(value: str) -> Any:
     stripped = value.strip()
     if not stripped or stripped[0] not in "{[":
@@ -1834,12 +1863,16 @@ def search_matching_lines(
 ) -> tuple[SearchLine, ...]:
     matching_lines = []
     for line in lines:
-        spans = [
-            match.span() for match in search_pattern.finditer(line) if match.start() != match.end()
-        ]
+        spans = match_spans(line, search_pattern)
         if spans:
             matching_lines.append(make_search_line(line, spans, line_width))
     return tuple(matching_lines)
+
+
+def match_spans(text: str, search_pattern: re.Pattern[str]) -> tuple[tuple[int, int], ...]:
+    return tuple(
+        match.span() for match in search_pattern.finditer(text) if match.start() != match.end()
+    )
 
 
 def make_search_line(
@@ -2254,19 +2287,22 @@ def search_sessions(
             lines = all_lines
             omitted_occurrence_count = 0
 
-        if lines:
-            session_file = SessionFile(
-                path=session_path,
-                relative_path=format_session_file_path(session_path, resolved_sessions_dir),
-                session_id=document.session_id,
-                started_at=document.started_at,
-                ended_at=document.ended_at,
-            )
+        session_file = SessionFile(
+            path=session_path,
+            relative_path=format_session_file_path(session_path, resolved_sessions_dir),
+            session_id=document.session_id,
+            started_at=document.started_at,
+            ended_at=document.ended_at,
+        )
+        inferred_title = infer_search_document_title(document)
+        session_info = session_info_for_search(session_file, entries_by_id, inferred_title)
+        title = session_title_for_search(session_file, entries_by_id, inferred_title)
+        session_info_matches = session_info_title_match_spans(session_info, title, search_pattern)
+        if lines or session_info_matches:
             results.append(
                 SearchResult(
-                    session_info=session_info_for_search(
-                        session_file, entries_by_id, infer_search_document_title(document)
-                    ),
+                    session_info=session_info,
+                    session_info_matches=session_info_matches,
                     lines=lines,
                     omitted_occurrence_count=omitted_occurrence_count,
                 )
@@ -2650,15 +2686,31 @@ def repair_session_index(
     )
 
 
-def text_with_highlights(line: SearchLine, encoding: str | None) -> Text:
+def text_spans_with_highlights(
+    text: str,
+    spans: Sequence[tuple[int, int]],
+    encoding: str | None,
+    *,
+    base_style: str,
+    match_style: str = "bold bright_red",
+) -> Text:
     rendered = Text()
     position = 0
-    for start, end in line.matches:
-        rendered.append(encode_for_output(line.text[position:start], encoding), style="dim")
-        rendered.append(encode_for_output(line.text[start:end], encoding), style="bold bright_red")
+    for start, end in spans:
+        rendered.append(encode_for_output(text[position:start], encoding), style=base_style)
+        rendered.append(encode_for_output(text[start:end], encoding), style=match_style)
         position = end
-    rendered.append(encode_for_output(line.text[position:], encoding), style="dim")
+    rendered.append(encode_for_output(text[position:], encoding), style=base_style)
     return rendered
+
+
+def text_with_highlights(line: SearchLine, encoding: str | None) -> Text:
+    return text_spans_with_highlights(
+        line.text,
+        line.matches,
+        encoding,
+        base_style="dim",
+    )
 
 
 def env_flag_enabled(value: str | None) -> bool:
@@ -2756,10 +2808,19 @@ def render_search_results(
     for result_index, result in enumerate(results):
         if result_index:
             console.print()
-        console.print(
-            Text(encode_for_output(result.session_info, sys.stdout.encoding), style="bold"),
-            soft_wrap=True,
-        )
+        if result.session_info_matches:
+            session_info_text = text_spans_with_highlights(
+                result.session_info,
+                result.session_info_matches,
+                sys.stdout.encoding,
+                base_style="bold",
+            )
+        else:
+            session_info_text = Text(
+                encode_for_output(result.session_info, sys.stdout.encoding),
+                style="bold",
+            )
+        console.print(session_info_text, soft_wrap=True)
         for line in result.lines:
             rendered_line = Text()
             rendered_line.append("  ", style="dim")

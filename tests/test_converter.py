@@ -2558,6 +2558,126 @@ class ConverterTests(unittest.TestCase):
             self.assertNotIn("\\n", output)
             self.assertNotIn('\\"', output)
 
+    def test_find_searches_indexed_session_titles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            session_id = "39393939-3939-3939-3939-393939393939"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Explore user input options"}],
+            )
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "Discuss a different topic.",
+                        },
+                    }
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["find", "Explore user input", "--codex-home", str(codex_home)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn(f"{session_id} - Explore user input options", output)
+            self.assertNotIn("User:", output)
+
+    def test_find_searches_unindexed_rollout_titles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            session_id = "40404040-4040-4040-4040-404040404040"
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "thread_name_updated",
+                            "thread_id": session_id,
+                            "thread_name": "Explore user input options",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-30T18:21:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "Discuss a different topic.",
+                        },
+                    },
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["find", "Explore user input", "--codex-home", str(codex_home)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn(f"{session_id} - Explore user input options", output)
+            self.assertIn("NO ENTRY IN session_index.jsonl", output)
+            self.assertNotIn("User:", output)
+
+    def test_find_color_always_highlights_title_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+
+            session_id = "41414141-4141-4141-4141-414141414141"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Explore user input options"}],
+            )
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "Discuss a different topic.",
+                        },
+                    }
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(
+                    [
+                        "find",
+                        "--color",
+                        "always",
+                        "Explore user input",
+                        "--codex-home",
+                        str(codex_home),
+                    ]
+                )
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("\x1b[1;91m", output)
+            self.assertIn("Explore user input", output)
+
     def test_find_infers_title_for_unindexed_rollout_header(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
