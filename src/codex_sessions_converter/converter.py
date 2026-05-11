@@ -24,10 +24,19 @@ from codex_sessions_converter.codex_state import (
     restore_session_index_backup,
 )
 from codex_sessions_converter.json_streams import iter_jsonl_objects
+from codex_sessions_converter.markdown_formatting import (
+    fenced_block,
+    parse_json_maybe,
+    render_json_block_content,
+    render_markdown_table,
+)
 from codex_sessions_converter.markdown_images import (
     MarkdownImageHandler,
-    is_image_content_item,
-    is_image_wrapper_text,
+)
+from codex_sessions_converter.message_content import (
+    content_to_text,
+    is_injected_user_context,
+    searchable_user_message_text,
 )
 from codex_sessions_converter.search import (
     SearchOptions,
@@ -1818,141 +1827,6 @@ def resolve_markdown_tool_mode(markdown_features: set[str], requested_mode: str)
     if requested_mode == "auto":
         return "smart" if "tools" in markdown_features else "none"
     return requested_mode
-
-
-def content_to_text(content: Any, image_handler: MarkdownImageHandler | None = None) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        value = image_handler.transform_value(content) if image_handler else content
-        return render_json_block_content(value)
-
-    has_image_item = any(is_image_content_item(item) for item in content)
-    parts = []
-    for item in content:
-        if isinstance(item, dict):
-            if isinstance(item.get("text"), str):
-                text = item["text"]
-                if has_image_item and is_image_wrapper_text(text):
-                    continue
-                parts.append(text)
-            elif is_image_content_item(item):
-                if image_handler:
-                    parts.append(image_handler.render_image(item.get("image_url"), "input image"))
-                else:
-                    parts.append(f"[input image: {item.get('image_url', '')}]")
-            elif item.get("type") == "local_image":
-                parts.append(f"[local image: {item.get('path') or item.get('name') or ''}]")
-            else:
-                value = image_handler.transform_value(item) if image_handler else item
-                parts.append(render_json_block_content(value))
-        else:
-            parts.append(str(item))
-    return "\n\n".join(part for part in parts if part)
-
-
-def is_injected_user_context(text: str) -> bool:
-    stripped = text.lstrip()
-    return stripped.startswith(("# AGENTS.md instructions", "<environment_context>"))
-
-
-def searchable_user_message_text(text: str) -> str:
-    if is_injected_user_context(text):
-        return ""
-
-    stripped = text.lstrip()
-    if stripped.startswith("# Context from my IDE setup:"):
-        marker = "## My request for Codex:"
-        marker_index = text.find(marker)
-        if marker_index == -1:
-            return ""
-        return text[marker_index + len(marker) :].strip()
-
-    return text
-
-
-def render_json_block_content(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=2)
-
-
-def render_markdown_table_value(value: Any) -> str:
-    if isinstance(value, (dict, list)):
-        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    elif value is None:
-        text = "null"
-    elif value is True:
-        text = "true"
-    elif value is False:
-        text = "false"
-    else:
-        text = str(value)
-
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    return text.replace("|", r"\|").replace("\n", "<br>")
-
-
-def flatten_table_rows(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
-    if isinstance(value, dict):
-        if not value:
-            return [(prefix, {})]
-        rows = []
-        for key, inner in value.items():
-            child_prefix = f"{prefix}.{key}" if prefix else str(key)
-            rows.extend(flatten_table_rows(inner, child_prefix))
-        return rows
-
-    if isinstance(value, list):
-        if not value:
-            return [(prefix, [])]
-        rows = []
-        for index, inner in enumerate(value):
-            child_prefix = f"{prefix}[{index}]" if prefix else f"[{index}]"
-            rows.extend(flatten_table_rows(inner, child_prefix))
-        return rows
-
-    return [(prefix, value)]
-
-
-def render_markdown_table(value: Any) -> str:
-    rows = flatten_table_rows(value)
-    lines = ["| Field | Value |", "| --- | --- |"]
-    for key, inner in rows:
-        rendered_key = render_markdown_table_value(key)
-        rendered_value = render_markdown_table_value(inner)
-        lines.append(f"| {rendered_key} | {rendered_value} |")
-    return "\n".join(lines)
-
-
-def fenced_block(content: str, language: str = "") -> str:
-    max_backticks = 2
-    for match in re.finditer(r"`+", content):
-        max_backticks = max(max_backticks, len(match.group(0)))
-    fence = "`" * max(3, max_backticks + 1)
-    suffix = language if language else ""
-    return f"{fence}{suffix}\n{content}\n{fence}"
-
-
-def parse_json_maybe(
-    value: Any, image_handler: MarkdownImageHandler | None = None
-) -> tuple[str, str]:
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped.startswith("{") or stripped.startswith("["):
-            try:
-                parsed = json.loads(stripped)
-            except json.JSONDecodeError:
-                return value, "text"
-            if image_handler:
-                parsed = image_handler.transform_value(parsed)
-            return render_json_block_content(parsed), "json"
-        if image_handler:
-            transformed = image_handler.transform_value(value)
-            if transformed != value:
-                return str(transformed), "text"
-        return value, "text"
-    if image_handler:
-        value = image_handler.transform_value(value)
-    return render_json_block_content(value), "json"
 
 
 def parse_json_object_maybe(value: Any) -> dict[str, Any] | None:
