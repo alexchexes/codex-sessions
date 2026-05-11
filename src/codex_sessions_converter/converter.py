@@ -32,14 +32,27 @@ from codex_sessions_converter.codex_state import (
     restore_session_index_backup,
     temp_path_for,
 )
+from codex_sessions_converter.json_streams import iter_jsonl_objects
+from codex_sessions_converter.session_index import (
+    SESSION_ID_RE,
+    SessionIndexEntry,
+    append_session_index_records,
+    format_session_index_timestamp,
+    is_session_id,
+    normalize_session_id,
+    read_session_index,
+    resolve_session_index_record,
+    session_index_record_id,
+    session_index_record_thread_name,
+    session_index_records,
+    write_session_index_records,
+)
+from codex_sessions_converter.timestamps import parse_timestamp
 
 __version__ = "0.1.0"
 
 
 SIMPLE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
-SESSION_ID_RE = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
 NO_ROLLOUT_FILE = "NO ROLLOUT FILE"
 NO_SESSION_INDEX_ENTRY = "NO ENTRY IN session_index.jsonl"
 MARKDOWN_FEATURES = {"tools", "metadata", "raw"}
@@ -99,13 +112,6 @@ class MarkdownOptions:
     include_raw: bool
     redaction: str
     image_mode: str = "truncate"
-
-
-@dataclass(frozen=True)
-class SessionIndexEntry:
-    session_id: str
-    thread_name: str
-    updated_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -715,59 +721,6 @@ def sanitize(value: Any, redaction: str) -> Any:
     return value
 
 
-def iter_jsonl_objects(input_path: Path) -> Iterable[tuple[int, dict[str, Any]]]:
-    with input_path.open("r", encoding="utf-8") as src:
-        for line_number, raw_line in enumerate(src, start=1):
-            stripped = raw_line.strip()
-            if not stripped:
-                continue
-            try:
-                obj = json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"Invalid JSON on line {line_number} of {input_path}: {exc}"
-                ) from exc
-            yield line_number, obj
-
-
-def iter_concatenated_json_objects(input_path: Path) -> Iterable[tuple[int, Any]]:
-    decoder = json.JSONDecoder()
-    with input_path.open("r", encoding="utf-8") as src:
-        for line_number, raw_line in enumerate(src, start=1):
-            remaining = raw_line.strip()
-            while remaining:
-                try:
-                    obj, end = decoder.raw_decode(remaining)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(
-                        f"Invalid JSON on line {line_number} of {input_path}: {exc}"
-                    ) from exc
-                yield line_number, obj
-                remaining = remaining[end:].lstrip()
-
-
-def parse_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-
-    text = value.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-
-    fractional = re.search(r"\.(\d+)(?=[+-]\d\d:?\d\d$|$)", text)
-    if fractional and len(fractional.group(1)) > 6:
-        text = text[: fractional.start(1) + 6] + text[fractional.end(1) :]
-
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
 def format_local_timestamp(value: datetime | None) -> str:
     if value is None:
         return "UNKNOWN"
@@ -784,14 +737,6 @@ def local_timezone_offset_label(value: datetime | None) -> str:
     absolute_minutes = abs(total_minutes)
     hours, minutes = divmod(absolute_minutes, 60)
     return f"UTC{sign}{hours:02d}:{minutes:02d}"
-
-
-def normalize_session_id(session_id: str) -> str:
-    return session_id.lower()
-
-
-def is_session_id(value: str) -> bool:
-    return SESSION_ID_RE.fullmatch(value) is not None
 
 
 def session_id_from_path(path: Path) -> str | None:
@@ -850,28 +795,6 @@ def session_file_metadata(
     except (OSError, ValueError):
         return session_id, started_at, ended_at
     return session_id, started_at, ended_at
-
-
-def read_session_index(index_path: Path) -> list[SessionIndexEntry]:
-    if not index_path.exists():
-        return []
-
-    entries = []
-    for _, record in iter_concatenated_json_objects(index_path):
-        if not isinstance(record, dict):
-            continue
-        session_id = record.get("id")
-        if not isinstance(session_id, str) or not session_id:
-            continue
-        thread_name = record.get("thread_name")
-        entries.append(
-            SessionIndexEntry(
-                session_id=session_id,
-                thread_name=thread_name if isinstance(thread_name, str) else "",
-                updated_at=parse_timestamp(record.get("updated_at")),
-            )
-        )
-    return entries
 
 
 def format_session_file_path(path: Path, sessions_dir: Path) -> str:
@@ -2359,107 +2282,6 @@ def format_repair_index_candidate(candidate: RepairIndexCandidate) -> str:
     return (
         f"{candidate.session_id} - {candidate.thread_name} - "
         f"{candidate.relative_path} - updated_at: {updated_at}"
-    )
-
-
-def format_session_index_timestamp(value: datetime | None) -> str:
-    timestamp = value or datetime.now(timezone.utc)
-    converted = timestamp.astimezone(timezone.utc)
-    return converted.isoformat().replace("+00:00", "Z")
-
-
-def session_index_record_for_candidate(candidate: RepairIndexCandidate) -> dict[str, str]:
-    return {
-        "id": candidate.session_id,
-        "thread_name": candidate.thread_name,
-        "updated_at": format_session_index_timestamp(candidate.updated_at),
-    }
-
-
-def append_session_index_records(
-    index_path: Path, candidates: Sequence[RepairIndexCandidate]
-) -> None:
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    existing_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
-    separator = "\n" if existing_text and not existing_text.endswith("\n") else ""
-    appended_text = "".join(
-        json.dumps(
-            session_index_record_for_candidate(candidate),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        + "\n"
-        for candidate in candidates
-    )
-    temp_path = temp_path_for(index_path)
-    temp_path.write_text(f"{existing_text}{separator}{appended_text}", encoding="utf-8")
-    temp_path.replace(index_path)
-
-
-def session_index_records(index_path: Path) -> list[Any]:
-    if not index_path.exists():
-        raise CliError(f"session_index.jsonl not found: {index_path}")
-    return [record for _, record in iter_concatenated_json_objects(index_path)]
-
-
-def write_session_index_records(index_path: Path, records: Sequence[Any]) -> None:
-    serialized = "".join(
-        json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in records
-    )
-    temp_path = temp_path_for(index_path)
-    temp_path.write_text(serialized, encoding="utf-8")
-    temp_path.replace(index_path)
-
-
-def session_index_record_id(record: Mapping[str, Any]) -> str | None:
-    session_id = record.get("id")
-    return session_id if isinstance(session_id, str) and session_id else None
-
-
-def session_index_record_thread_name(record: Mapping[str, Any]) -> str:
-    thread_name = record.get("thread_name")
-    return thread_name if isinstance(thread_name, str) else ""
-
-
-def matching_session_index_records(
-    records: Sequence[Any], target: str
-) -> tuple[tuple[int, dict[str, Any]], ...]:
-    target_is_id = is_session_id(target)
-    matches: list[tuple[int, dict[str, Any]]] = []
-    for index, record in enumerate(records):
-        if not isinstance(record, dict):
-            continue
-        session_id = session_index_record_id(record)
-        if session_id is None:
-            continue
-        if target_is_id:
-            if normalize_session_id(session_id) == normalize_session_id(target):
-                matches.append((index, record))
-        elif session_index_record_thread_name(record) == target:
-            matches.append((index, record))
-    return tuple(matches)
-
-
-def resolve_session_index_record(records: Sequence[Any], target: str) -> tuple[int, dict[str, Any]]:
-    matches = matching_session_index_records(records, target)
-    if len(matches) == 1:
-        return matches[0]
-
-    if not matches:
-        if is_session_id(target):
-            raise CliError(f"No session_index.jsonl entry found for ID: {target}")
-        raise CliError(f"No session_index.jsonl entry found for title: {target}")
-
-    rendered_matches = ", ".join(
-        session_index_record_id(record) or "<missing id>" for _, record in matches
-    )
-    if is_session_id(target):
-        raise CliError(
-            f"Multiple session_index.jsonl entries found for ID {target}: {rendered_matches}"
-        )
-    raise CliError(
-        f"Multiple session_index.jsonl entries matched title {target!r}: "
-        f"{rendered_matches}. Re-run with one ID."
     )
 
 

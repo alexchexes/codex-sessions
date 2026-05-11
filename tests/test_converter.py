@@ -26,12 +26,12 @@ from codex_sessions_converter.converter import (  # noqa: E402
     local_timezone_offset_label,
     main,
     parse_markdown_include,
-    parse_timestamp,
     render_reasoning,
     resolve_markdown_tool_mode,
     resolve_output_path,
     search_cache_path,
 )
+from codex_sessions_converter.timestamps import parse_timestamp  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
