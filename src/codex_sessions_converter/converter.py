@@ -32,6 +32,15 @@ from codex_sessions_converter.codex_state import (
     restore_session_index_backup,
 )
 from codex_sessions_converter.json_streams import iter_jsonl_objects
+from codex_sessions_converter.session_documents import (
+    SearchDocument,
+    infer_search_document_title,
+    inferred_thread_name,
+    sanitize,
+)
+from codex_sessions_converter.session_documents import (
+    build_search_document as build_session_document,
+)
 from codex_sessions_converter.session_index import (
     SESSION_ID_RE,
     SessionIndexEntry,
@@ -59,9 +68,6 @@ from codex_sessions_converter.transfer import (
     renamed_rollout_records,
     resolve_export_output_path,
     rollout_filename_date,
-    thread_name_updated_matches_session,
-    thread_name_updated_name,
-    thread_name_updated_session_id,
     write_rollout_records,
 )
 
@@ -80,8 +86,6 @@ DEFAULT_TOOL_PREVIEW_CHARS = 700
 DATA_IMAGE_PREFIX_CHARS = 24
 MAX_MATCHES_BEFORE_LINE_OMISSION = 2
 MAX_VISIBLE_MATCHES_PER_OMITTED_LINE = 1
-MAX_INFERRED_TITLE_CHARS = 80
-MAX_INFERRED_TITLE_WORDS = 12
 DATA_IMAGE_URL_RE = re.compile(r"^data:(image/[A-Za-z0-9.+-]+);base64,(.*)$", re.DOTALL)
 IMAGE_EXTENSION_BY_MIME_TYPE = {
     "image/png": "png",
@@ -169,17 +173,6 @@ class SearchResult:
     session_info_matches: tuple[tuple[int, int], ...]
     lines: tuple[SearchLine, ...]
     omitted_occurrence_count: int
-
-
-@dataclass(frozen=True)
-class SearchDocument:
-    session_id: str | None
-    thread_name: str | None
-    started_at: datetime | None
-    ended_at: datetime | None
-    visible_lines: tuple[str, ...]
-    metadata_lines: tuple[str, ...]
-    tool_lines: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -676,20 +669,6 @@ def resolve_output_path(
     return expanded_output.resolve()
 
 
-def sanitize(value: Any, redaction: str) -> Any:
-    if isinstance(value, dict):
-        sanitized = {}
-        for key, inner in value.items():
-            if key == "encrypted_content":
-                sanitized[key] = redaction
-            else:
-                sanitized[key] = sanitize(inner, redaction)
-        return sanitized
-    if isinstance(value, list):
-        return [sanitize(item, redaction) for item in value]
-    return value
-
-
 def format_local_timestamp(value: datetime | None) -> str:
     if value is None:
         return "UNKNOWN"
@@ -1059,55 +1038,11 @@ def search_document_lines(document: SearchDocument, options: SearchOptions) -> l
 
 
 def build_search_document(input_path: Path, redaction: str) -> SearchDocument:
-    session_id = session_id_from_path(input_path)
-    thread_name: str | None = None
-    started_at: datetime | None = None
-    ended_at: datetime | None = None
-    line_groups: dict[str, list[str]] = {"visible": [], "metadata": [], "tools": []}
-    seen_lines: dict[str, set[str]] = {"visible": set(), "metadata": set(), "tools": set()}
-
-    for _, raw_record in iter_jsonl_objects(input_path):
-        record_timestamp = parse_timestamp(raw_record.get("timestamp"))
-        if record_timestamp is not None:
-            ended_at = record_timestamp
-
-        payload = raw_record.get("payload")
-        if started_at is None:
-            started_at = record_timestamp
-            if started_at is None and isinstance(payload, dict):
-                started_at = parse_timestamp(payload.get("timestamp"))
-        if (
-            session_id is None
-            and raw_record.get("type") == "session_meta"
-            and isinstance(payload, dict)
-        ):
-            payload_id = payload.get("id")
-            if isinstance(payload_id, str) and payload_id:
-                session_id = payload_id
-        if raw_record.get("type") == "event_msg" and isinstance(payload, dict):
-            event_session_id = thread_name_updated_session_id(payload)
-            if session_id is None and event_session_id:
-                session_id = event_session_id
-            if thread_name_updated_matches_session(payload, session_id):
-                event_thread_name = thread_name_updated_name(payload)
-                if event_thread_name:
-                    thread_name = event_thread_name
-
-        record = sanitize(raw_record, redaction)
-        for group, lines in render_search_line_groups(record):
-            for line in lines:
-                if line and line not in seen_lines[group]:
-                    seen_lines[group].add(line)
-                    line_groups[group].append(line)
-
-    return SearchDocument(
-        session_id=session_id,
-        thread_name=thread_name,
-        started_at=started_at,
-        ended_at=ended_at,
-        visible_lines=tuple(line_groups["visible"]),
-        metadata_lines=tuple(line_groups["metadata"]),
-        tool_lines=tuple(line_groups["tools"]),
+    return build_session_document(
+        input_path,
+        redaction,
+        session_id_from_path=session_id_from_path,
+        render_line_groups=render_search_line_groups,
     )
 
 
@@ -1165,25 +1100,6 @@ def render_labeled_search_lines(label: str, text: str) -> list[str]:
     if not normalized_text:
         return []
     return [f"{label}: {line.strip()}" for line in normalized_text.splitlines() if line.strip()]
-
-
-def infer_search_document_title(document: SearchDocument) -> str | None:
-    if document.thread_name:
-        return document.thread_name
-    user_title = first_inferred_title_with_prefix(document.visible_lines, "User: ")
-    if user_title:
-        return user_title
-    return first_inferred_title_with_prefix(document.visible_lines, "Codex: ")
-
-
-def fallback_thread_name(session_id: str) -> str:
-    return f"Imported session {session_id[:8]}"
-
-
-def inferred_thread_name(document: SearchDocument) -> str:
-    if document.session_id is None:
-        return "Imported session"
-    return infer_search_document_title(document) or fallback_thread_name(document.session_id)
 
 
 def import_target_date(source_path: Path, document: SearchDocument) -> tuple[str, str, str]:
@@ -1574,45 +1490,6 @@ def export_session(
     else:
         shutil.copy2(plan.source_path, plan.output_path)
     return ExportSessionResult(plan=plan)
-
-
-def first_inferred_title_with_prefix(lines: Sequence[str], prefix: str) -> str | None:
-    for line in lines:
-        if not line.startswith(prefix):
-            continue
-        title = infer_title_from_message(line[len(prefix) :])
-        if title:
-            return title
-    return None
-
-
-def infer_title_from_message(text: str) -> str | None:
-    normalized = re.sub(r"\s+", " ", text).strip(" \t\r\n#*-_`\"'")
-    if not normalized:
-        return None
-
-    sentence_match = re.search(r"(?<=[.!?])\s+", normalized)
-    if sentence_match:
-        sentence = normalized[: sentence_match.start() + 1].strip()
-        if 8 <= len(sentence) <= MAX_INFERRED_TITLE_CHARS:
-            return sentence
-
-    if len(normalized) <= MAX_INFERRED_TITLE_CHARS:
-        return normalized
-
-    words = normalized.split()
-    selected_words: list[str] = []
-    selected_length = 0
-    for word in words[:MAX_INFERRED_TITLE_WORDS]:
-        next_length = selected_length + len(word) + (1 if selected_words else 0)
-        if next_length > MAX_INFERRED_TITLE_CHARS:
-            break
-        selected_words.append(word)
-        selected_length = next_length
-
-    if selected_words:
-        return " ".join(selected_words)
-    return normalized[:MAX_INFERRED_TITLE_CHARS].rstrip()
 
 
 def render_session_metadata_search_lines(payload: dict[str, Any]) -> list[str]:
