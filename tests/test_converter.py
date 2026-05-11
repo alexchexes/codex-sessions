@@ -16,11 +16,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from codex_sessions_converter.converter import (  # noqa: E402
     MarkdownOptions,
     cli_prog_from_argv0,
-    console_color_options,
     convert_jsonl_to_markdown,
     convert_jsonl_to_yaml_stream,
     default_output_path,
-    encode_for_output,
     format_local_timestamp,
     list_session_lines,
     local_timezone_offset_label,
@@ -31,6 +29,10 @@ from codex_sessions_converter.converter import (  # noqa: E402
     resolve_output_path,
 )
 from codex_sessions_converter.search_cache import search_cache_path  # noqa: E402
+from codex_sessions_converter.search_output import (  # noqa: E402
+    console_color_options,
+    encode_for_output,
+)
 from codex_sessions_converter.timestamps import parse_timestamp  # noqa: E402
 
 
@@ -3086,7 +3088,10 @@ class ConverterTests(unittest.TestCase):
 
     def test_color_auto_forces_terminal_for_git_bash_pipe(self) -> None:
         git_bash_env = {"TERM": "xterm-256color", "MSYSTEM": "MINGW64"}
-        with patch("codex_sessions_converter.converter.is_windows_pipe_stream", return_value=True):
+        with patch(
+            "codex_sessions_converter.search_output.is_windows_pipe_stream",
+            return_value=True,
+        ):
             self.assertEqual(
                 console_color_options("auto", StringIO(), git_bash_env),
                 (True, False),
@@ -3094,7 +3099,10 @@ class ConverterTests(unittest.TestCase):
 
     def test_color_auto_does_not_force_for_git_bash_disk_redirect(self) -> None:
         git_bash_env = {"TERM": "xterm-256color", "MSYSTEM": "MINGW64"}
-        with patch("codex_sessions_converter.converter.is_windows_pipe_stream", return_value=False):
+        with patch(
+            "codex_sessions_converter.search_output.is_windows_pipe_stream",
+            return_value=False,
+        ):
             self.assertEqual(
                 console_color_options("auto", StringIO(), git_bash_env),
                 (None, False),
