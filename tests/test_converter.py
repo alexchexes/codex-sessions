@@ -1847,7 +1847,7 @@ class ConverterTests(unittest.TestCase):
             target_path = codex_home / "sessions" / "2026" / "04" / "30" / source_path.name
 
             with patch(
-                "codex_sessions_converter.converter.reset_codex_state_cache",
+                "codex_sessions_converter.session_transfer.reset_codex_state_cache",
                 side_effect=OSError("locked"),
             ):
                 with self.assertRaises(SystemExit) as raised:
