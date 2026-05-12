@@ -13,15 +13,17 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from codex_sessions_converter.cli_args import (  # noqa: E402
+    cli_prog_from_argv0,
+    parse_markdown_include,
+    resolve_markdown_tool_mode,
+)
 from codex_sessions_converter.conversion_paths import (  # noqa: E402
     default_output_path,
     resolve_output_path,
 )
 from codex_sessions_converter.converter import (  # noqa: E402
-    cli_prog_from_argv0,
     main,
-    parse_markdown_include,
-    resolve_markdown_tool_mode,
 )
 from codex_sessions_converter.markdown_output import (  # noqa: E402
     MarkdownOptions,
