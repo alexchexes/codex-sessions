@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from codex_sessions_converter.search_cache import (
+from codex_sessions.search.cache import (
     SEARCH_CACHE_VERSION,
     cached_search_document,
     prune_missing_search_cache_entries,
@@ -14,7 +14,7 @@ from codex_sessions_converter.search_cache import (
     search_cache_path,
     write_search_cache,
 )
-from codex_sessions_converter.session_documents import SearchDocument
+from codex_sessions.sessions.documents import SearchDocument
 
 
 class SearchCacheTests(unittest.TestCase):

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codex_sessions_converter.yaml_output import (
+from codex_sessions.formats.yaml import (
     block_style_lines,
     convert_jsonl_to_yaml_stream,
     dump_yaml_lines,

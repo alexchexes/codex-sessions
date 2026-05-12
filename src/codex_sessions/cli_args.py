@@ -4,7 +4,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from codex_sessions_converter.markdown_tools import DEFAULT_TOOL_PREVIEW_CHARS
+from codex_sessions.formats.markdown.tools import DEFAULT_TOOL_PREVIEW_CHARS
 
 MARKDOWN_FEATURES = {"tools", "metadata", "raw"}
 MARKDOWN_TOOL_MODES = {"auto", "none", "names", "smart", "preview", "full"}
@@ -18,7 +18,7 @@ MARKDOWN_PRESETS = {
     "full": {"tools", "metadata", "raw"},
 }
 DEFAULT_CLI_PROG = "codex-sessions"
-CLI_PROG_ALIASES = {DEFAULT_CLI_PROG, "codex-sessions-converter"}
+CLI_PROG_ALIASES = {DEFAULT_CLI_PROG}
 MARKDOWN_INCLUDE_ALIASES = {
     "all": "all",
     "none": "none",

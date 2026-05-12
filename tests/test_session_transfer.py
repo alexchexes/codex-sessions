@@ -3,15 +3,15 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from codex_sessions_converter.session_documents import SearchDocument
-from codex_sessions_converter.session_transfer import (
+from codex_sessions.sessions.documents import SearchDocument
+from codex_sessions.sessions.rollout import FileFingerprint, ImportSessionPlan
+from codex_sessions.sessions.transfer import (
     default_export_filename,
     existing_index_record_for_id,
     import_target_path,
     session_index_record_for_import_plan,
     session_index_records_for_import,
 )
-from codex_sessions_converter.transfer import FileFingerprint, ImportSessionPlan
 
 SESSION_ID = "019de863-c167-7942-9e39-9a3291b9bf55"
 

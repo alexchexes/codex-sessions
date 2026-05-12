@@ -1,7 +1,7 @@
 import re
 import unittest
 
-from codex_sessions_converter.search import (
+from codex_sessions.search.core import (
     SearchOptions,
     compile_search_pattern,
     match_spans,

@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from codex_sessions_converter.codex_state import (
+from codex_sessions.codex.state import (
     CodexStateError,
     backup_dir_for,
     backup_label,
@@ -13,14 +13,15 @@ from codex_sessions_converter.codex_state import (
     restore_file_backup,
     restore_session_index_backup,
 )
-from codex_sessions_converter.errors import CliError
-from codex_sessions_converter.session_documents import SearchDocument, inferred_thread_name
-from codex_sessions_converter.session_files import (
+from codex_sessions.errors import CliError
+from codex_sessions.search.sessions import build_search_document
+from codex_sessions.sessions.documents import SearchDocument, inferred_thread_name
+from codex_sessions.sessions.files import (
     SessionFile,
     discover_session_files,
     session_id_from_path,
 )
-from codex_sessions_converter.session_index import (
+from codex_sessions.sessions.index import (
     format_session_index_timestamp,
     is_session_id,
     normalize_session_id,
@@ -30,8 +31,7 @@ from codex_sessions_converter.session_index import (
     session_index_records,
     write_session_index_records,
 )
-from codex_sessions_converter.session_search import build_search_document
-from codex_sessions_converter.transfer import (
+from codex_sessions.sessions.rollout import (
     ExportSessionPlan,
     ExportSessionResult,
     ImportSessionPlan,

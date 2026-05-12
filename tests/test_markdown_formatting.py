@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codex_sessions_converter.markdown_formatting import (
+from codex_sessions.formats.markdown.formatting import (
     fenced_block,
     flatten_table_rows,
     parse_json_maybe,
@@ -10,7 +10,7 @@ from codex_sessions_converter.markdown_formatting import (
     render_markdown_table,
     render_markdown_table_value,
 )
-from codex_sessions_converter.markdown_images import MarkdownImageHandler
+from codex_sessions.formats.markdown.images import MarkdownImageHandler
 
 
 class MarkdownFormattingTests(unittest.TestCase):

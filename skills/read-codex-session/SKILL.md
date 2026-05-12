@@ -55,12 +55,12 @@ image content matters and the Markdown should link to real image files. Use
 Markdown; inline image notes point back to `--md-images truncate` and
 `--md-images extract` for cleanup.
 
-Use `--format yaml` or the converter CLI directly only when the user asks for raw structured inspection.
+Use `--format yaml` or the `codex-sessions` CLI directly only when the user asks for raw structured inspection.
 
 ## Search
 
 When the user asks to find a previous conversation by topic or phrase, prefer
-the converter search before raw `rg` over JSONL:
+`codex-sessions find` before raw `rg` over JSONL:
 
 ```bash
 codex-sessions find -i "search phrase"

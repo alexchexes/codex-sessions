@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codex_sessions_converter.markdown_images import MarkdownImageHandler
-from codex_sessions_converter.message_content import (
+from codex_sessions.formats.markdown.images import MarkdownImageHandler
+from codex_sessions.formats.markdown.message_content import (
     content_to_text,
     is_injected_user_context,
     searchable_user_message_text,

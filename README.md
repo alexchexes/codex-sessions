@@ -1,9 +1,9 @@
-# Codex sessions converter
+# Codex sessions
 
-Convert Codex session rollout JSONL files into more readable Markdown or YAML.
+Inspect, search, repair, import/export, and convert Codex session files.
 
-It turns session rollup files that can be found in a Codex home directory such as
-`~/.codex/sessions/YYYY/MM/DD/rollout-<...>.jsonl` into a more readable YAML, or a dialogue-oriented Markdown file:
+It can turn session rollout files from a Codex home directory such as
+`~/.codex/sessions/YYYY/MM/DD/rollout-<...>.jsonl` into readable YAML or dialogue-oriented Markdown:
 
 ```md
 # User:
@@ -22,7 +22,7 @@ It turns session rollup files that can be found in a Codex home directory such a
 Install the latest version from GitHub:
 
 ```bash
-pipx install git+https://github.com/alexchexes/codex-sessions-converter.git
+pipx install git+https://github.com/alexchexes/codex-sessions.git
 ```
 
 Or install from a local checkout:
@@ -41,21 +41,19 @@ python -m pipx ensurepath
 Or run it from a checkout without installing:
 
 ```bash
-PYTHONPATH=src python -m codex_sessions_converter --help
+PYTHONPATH=src python -m codex_sessions --help
 ```
 
 In PowerShell:
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m codex_sessions_converter --help
+python -m codex_sessions --help
 ```
 
 ## Usage
 
-The installed short command is `codex-sessions`. The longer
-`codex-sessions-converter` command is also available for existing scripts and
-explicitness.
+The installed command is `codex-sessions`.
 
 Convert to YAML:
 
@@ -98,7 +96,7 @@ Use `--md-images inline` only when you want to keep base64 image data inline in
 the Markdown; inline images include a hidden comment pointing back to truncation
 or extraction mode for future cleanup.
 
-When no output path is supplied, the converter writes under the Codex home
+When no output path is supplied, the tool writes under the Codex home
 directory, not the current directory. Codex home defaults to `CODEX_HOME` or
 `~/.codex`, so a session rollout normally writes to a path like
 `~/.codex/tmp/sessions/YYYY/MM/DD/rollout-<...>.yaml`.
@@ -109,7 +107,7 @@ Convert by session ID:
 codex-sessions 019dd5ce-19e1-78c3-9313-325228ddd983
 ```
 
-Write an ID conversion to the current directory:
+Write the converted session to the current directory:
 
 ```bash
 codex-sessions 019dd5ce-19e1-78c3-9313-325228ddd983 ./
@@ -332,7 +330,7 @@ names and call IDs.
   compactly in Markdown.
 - Markdown metadata tables escape pipe characters and replace embedded newlines
   with `<br>`.
-- The converter uses Rich for colored search output.
+- The tool uses Rich for colored search output.
 
 ## License
 

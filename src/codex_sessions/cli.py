@@ -4,7 +4,7 @@ import os
 import sys
 from collections.abc import Sequence
 
-from codex_sessions_converter.cli_args import (
+from codex_sessions.cli_args import (
     cli_prog_from_argv0,
     parse_args,
     parse_export_args,
@@ -16,41 +16,41 @@ from codex_sessions_converter.cli_args import (
     parse_search_args,
     resolve_markdown_tool_mode,
 )
-from codex_sessions_converter.conversion_paths import (
-    infer_output_format,
-    resolve_conversion_input,
-    resolve_output_path,
+from codex_sessions.errors import CliError
+from codex_sessions.formats.markdown.output import MarkdownOptions, convert_jsonl_to_markdown
+from codex_sessions.formats.yaml import convert_jsonl_to_yaml_stream
+from codex_sessions.search.core import SearchOptions
+from codex_sessions.search.output import encode_for_output, render_search_results
+from codex_sessions.search.sessions import (
+    search_sessions,
 )
-from codex_sessions_converter.errors import CliError
-from codex_sessions_converter.markdown_output import MarkdownOptions, convert_jsonl_to_markdown
-from codex_sessions_converter.search import SearchOptions
-from codex_sessions_converter.search_output import encode_for_output, render_search_results
-from codex_sessions_converter.session_display import (
+from codex_sessions.sessions.display import (
     format_local_timestamp,
     local_timezone_offset_label,
 )
-from codex_sessions_converter.session_index_workflows import (
+from codex_sessions.sessions.index_workflows import (
     RepairIndexCandidate,
     list_session_lines_with_warnings,
     missing_session_index_candidates,
     rename_session_index_entry,
     repair_session_index,
 )
-from codex_sessions_converter.session_search import (
-    search_sessions,
+from codex_sessions.sessions.paths import (
+    infer_output_format,
+    resolve_conversion_input,
+    resolve_output_path,
 )
-from codex_sessions_converter.session_transfer import (
+from codex_sessions.sessions.rollout import (
+    ExportSessionPlan,
+    ImportSessionPlan,
+    format_fingerprint,
+)
+from codex_sessions.sessions.transfer import (
     export_session,
     import_bare_rollout,
     plan_bare_rollout_import,
     plan_session_export,
 )
-from codex_sessions_converter.transfer import (
-    ExportSessionPlan,
-    ImportSessionPlan,
-    format_fingerprint,
-)
-from codex_sessions_converter.yaml_output import convert_jsonl_to_yaml_stream
 
 __version__ = "0.1.0"
 

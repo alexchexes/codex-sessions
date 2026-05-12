@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codex_sessions_converter.markdown_images import (
+from codex_sessions.formats.markdown.images import (
     MarkdownImageHandler,
     describe_data_image,
     image_extension,

@@ -2,12 +2,12 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-from codex_sessions_converter.errors import CliError
-from codex_sessions_converter.session_files import (
+from codex_sessions.errors import CliError
+from codex_sessions.sessions.files import (
     discover_session_files,
     format_session_file_path,
 )
-from codex_sessions_converter.session_index import (
+from codex_sessions.sessions.index import (
     is_session_id,
     normalize_session_id,
 )

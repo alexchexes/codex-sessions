@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codex_sessions_converter.session_index import (  # noqa: E402
+from codex_sessions.sessions.index import (  # noqa: E402
     SessionIndexEntry,
     SessionIndexError,
     append_session_index_records,

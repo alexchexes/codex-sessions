@@ -5,9 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from codex_sessions_converter.json_streams import iter_jsonl_objects
-from codex_sessions_converter.timestamps import parse_timestamp
-from codex_sessions_converter.transfer import (
+from codex_sessions.core.json_streams import iter_jsonl_objects
+from codex_sessions.core.timestamps import parse_timestamp
+from codex_sessions.sessions.rollout import (
     thread_name_updated_matches_session,
     thread_name_updated_name,
     thread_name_updated_session_id,

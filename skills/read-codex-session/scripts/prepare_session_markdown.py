@@ -97,11 +97,11 @@ def default_output_path(input_path: Path, codex_home: Path, output_format: str) 
     return (codex_home / "tmp" / relative_input).with_suffix(suffix)
 
 
-def converter_command(converter: str) -> list[str]:
-    resolved = shutil.which(converter)
+def tool_command(command: str) -> list[str]:
+    resolved = shutil.which(command)
     if resolved:
         return [resolved]
-    return [sys.executable, "-m", "codex_sessions_converter"]
+    return [sys.executable, "-m", "codex_sessions"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -151,9 +151,9 @@ def parse_args() -> argparse.Namespace:
         help="Preview characters for --md-tools preview. Default: 700.",
     )
     parser.add_argument(
-        "--converter",
+        "--command",
         default="codex-sessions",
-        help="Converter command name/path. Default: codex-sessions.",
+        help="codex-sessions command name/path. Default: codex-sessions.",
     )
     return parser.parse_args()
 
@@ -170,7 +170,7 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     command = [
-        *converter_command(args.converter),
+        *tool_command(args.command),
         "--format",
         args.format,
         "--md-include",

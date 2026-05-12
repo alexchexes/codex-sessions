@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from codex_sessions_converter.codex_state import (
+from codex_sessions.codex.state import (
     CodexStateError,
     StateCacheBackup,
     backup_dir_for,
@@ -15,22 +15,22 @@ from codex_sessions_converter.codex_state import (
     restore_file_backup,
     restore_session_index_backup,
 )
-from codex_sessions_converter.conversion_paths import resolve_session_id
-from codex_sessions_converter.errors import CliError
-from codex_sessions_converter.session_display import (
+from codex_sessions.errors import CliError
+from codex_sessions.search.sessions import load_search_documents
+from codex_sessions.sessions.display import (
     NO_ROLLOUT_FILE,
     format_indexed_session_line,
     format_unindexed_session_line,
 )
-from codex_sessions_converter.session_documents import (
+from codex_sessions.sessions.documents import (
     infer_search_document_title,
     inferred_thread_name,
 )
-from codex_sessions_converter.session_files import (
+from codex_sessions.sessions.files import (
     SessionFile,
     format_session_file_path,
 )
-from codex_sessions_converter.session_index import (
+from codex_sessions.sessions.index import (
     append_session_index_records,
     normalize_session_id,
     read_session_index,
@@ -40,8 +40,8 @@ from codex_sessions_converter.session_index import (
     session_index_records,
     write_session_index_records,
 )
-from codex_sessions_converter.session_search import load_search_documents
-from codex_sessions_converter.transfer import (
+from codex_sessions.sessions.paths import resolve_session_id
+from codex_sessions.sessions.rollout import (
     read_rollout_records,
     renamed_rollout_records,
     write_rollout_records,

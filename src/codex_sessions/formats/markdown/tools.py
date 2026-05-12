@@ -2,12 +2,12 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from codex_sessions_converter.markdown_formatting import (
+from codex_sessions.formats.markdown.formatting import (
     fenced_block,
     parse_json_maybe,
     render_json_block_content,
 )
-from codex_sessions_converter.markdown_images import MarkdownImageHandler
+from codex_sessions.formats.markdown.images import MarkdownImageHandler
 
 DEFAULT_TOOL_PREVIEW_CHARS = 700
 

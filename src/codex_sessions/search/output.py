@@ -6,7 +6,7 @@ from typing import TextIO
 from rich.console import Console
 from rich.text import Text
 
-from codex_sessions_converter.search import SearchLine, SearchResult
+from codex_sessions.search.core import SearchLine, SearchResult
 
 
 def text_spans_with_highlights(

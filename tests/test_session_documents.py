@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from codex_sessions_converter.session_documents import (
+from codex_sessions.sessions.documents import (
     SearchDocument,
     build_search_document,
     infer_search_document_title,

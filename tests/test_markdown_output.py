@@ -1,7 +1,7 @@
 import unittest
 from io import StringIO
 
-from codex_sessions_converter.markdown_output import (
+from codex_sessions.formats.markdown.output import (
     is_metadata_record,
     metadata_title,
     render_metadata,

@@ -1,7 +1,7 @@
 from typing import Any
 
-from codex_sessions_converter.markdown_formatting import render_json_block_content
-from codex_sessions_converter.markdown_images import (
+from codex_sessions.formats.markdown.formatting import render_json_block_content
+from codex_sessions.formats.markdown.images import (
     MarkdownImageHandler,
     is_image_content_item,
     is_image_wrapper_text,

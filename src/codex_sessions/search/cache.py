@@ -4,8 +4,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from codex_sessions_converter.session_documents import SearchDocument
-from codex_sessions_converter.timestamps import parse_timestamp
+from codex_sessions.core.timestamps import parse_timestamp
+from codex_sessions.sessions.documents import SearchDocument
 
 SEARCH_CACHE_VERSION = 3
 SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v3.json"

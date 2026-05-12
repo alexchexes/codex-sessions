@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from codex_sessions_converter.session_display import (
+from codex_sessions.sessions.display import (
     NO_SESSION_INDEX_ENTRY,
     format_indexed_session_line,
     format_session_timestamps,
@@ -12,8 +12,8 @@ from codex_sessions_converter.session_display import (
     session_info_title_match_spans,
     session_title_for_search,
 )
-from codex_sessions_converter.session_files import SessionFile
-from codex_sessions_converter.session_index import SessionIndexEntry
+from codex_sessions.sessions.files import SessionFile
+from codex_sessions.sessions.index import SessionIndexEntry
 
 
 class SessionDisplayTests(unittest.TestCase):

@@ -4,9 +4,8 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from codex_sessions_converter.search import SearchOptions
-from codex_sessions_converter.session_documents import SearchDocument
-from codex_sessions_converter.session_search import (
+from codex_sessions.search.core import SearchOptions
+from codex_sessions.search.sessions import (
     build_search_document,
     render_search_line_groups,
     render_search_text,
@@ -14,6 +13,7 @@ from codex_sessions_converter.session_search import (
     search_document_lines,
     search_sessions,
 )
+from codex_sessions.sessions.documents import SearchDocument
 
 
 def search_options(**overrides: Any) -> SearchOptions:

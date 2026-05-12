@@ -1,9 +1,9 @@
 import re
 from datetime import datetime, timezone
 
-from codex_sessions_converter.search import match_spans
-from codex_sessions_converter.session_files import SessionFile
-from codex_sessions_converter.session_index import SessionIndexEntry, normalize_session_id
+from codex_sessions.search.core import match_spans
+from codex_sessions.sessions.files import SessionFile
+from codex_sessions.sessions.index import SessionIndexEntry, normalize_session_id
 
 NO_ROLLOUT_FILE = "NO ROLLOUT FILE"
 NO_SESSION_INDEX_ENTRY = "NO ENTRY IN session_index.jsonl"

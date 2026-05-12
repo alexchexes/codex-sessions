@@ -3,14 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codex_sessions_converter.conversion_paths import (
+from codex_sessions.errors import CliError
+from codex_sessions.sessions.paths import (
     default_output_path,
     infer_output_format,
     output_filename,
     resolve_conversion_input,
     resolve_output_path,
 )
-from codex_sessions_converter.errors import CliError
 
 
 class ConversionPathsTests(unittest.TestCase):

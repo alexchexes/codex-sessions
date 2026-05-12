@@ -2,7 +2,7 @@ import json
 import re
 from typing import Any
 
-from codex_sessions_converter.markdown_images import MarkdownImageHandler
+from codex_sessions.formats.markdown.images import MarkdownImageHandler
 
 
 def render_json_block_content(value: Any) -> str:

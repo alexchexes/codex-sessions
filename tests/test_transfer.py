@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codex_sessions_converter.transfer import (
+from codex_sessions.sessions.rollout import (
     export_title_slug,
     file_fingerprint,
     format_fingerprint,

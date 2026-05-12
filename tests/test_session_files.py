@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from codex_sessions_converter.session_files import (
+from codex_sessions.sessions.files import (
     discover_session_files,
     format_session_file_path,
     session_file_metadata,

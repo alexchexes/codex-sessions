@@ -13,35 +13,35 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codex_sessions_converter.cli_args import (  # noqa: E402
+from codex_sessions.cli import (  # noqa: E402
+    main,
+)
+from codex_sessions.cli_args import (  # noqa: E402
     cli_prog_from_argv0,
     parse_markdown_include,
     resolve_markdown_tool_mode,
 )
-from codex_sessions_converter.conversion_paths import (  # noqa: E402
-    default_output_path,
-    resolve_output_path,
-)
-from codex_sessions_converter.converter import (  # noqa: E402
-    main,
-)
-from codex_sessions_converter.markdown_output import (  # noqa: E402
+from codex_sessions.core.timestamps import parse_timestamp  # noqa: E402
+from codex_sessions.formats.markdown.output import (  # noqa: E402
     MarkdownOptions,
     convert_jsonl_to_markdown,
     render_reasoning,
 )
-from codex_sessions_converter.search_cache import search_cache_path  # noqa: E402
-from codex_sessions_converter.search_output import (  # noqa: E402
+from codex_sessions.formats.yaml import convert_jsonl_to_yaml_stream  # noqa: E402
+from codex_sessions.search.cache import search_cache_path  # noqa: E402
+from codex_sessions.search.output import (  # noqa: E402
     console_color_options,
     encode_for_output,
 )
-from codex_sessions_converter.session_display import (  # noqa: E402
+from codex_sessions.sessions.display import (  # noqa: E402
     format_local_timestamp,
     local_timezone_offset_label,
 )
-from codex_sessions_converter.session_index_workflows import list_session_lines  # noqa: E402
-from codex_sessions_converter.timestamps import parse_timestamp  # noqa: E402
-from codex_sessions_converter.yaml_output import convert_jsonl_to_yaml_stream  # noqa: E402
+from codex_sessions.sessions.index_workflows import list_session_lines  # noqa: E402
+from codex_sessions.sessions.paths import (  # noqa: E402
+    default_output_path,
+    resolve_output_path,
+)
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
@@ -55,23 +55,17 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-class ConverterTests(unittest.TestCase):
+class CliTests(unittest.TestCase):
     def test_short_cli_entry_point_is_configured(self) -> None:
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-        self.assertIn('codex-sessions = "codex_sessions_converter.converter:main"', pyproject)
-        self.assertIn(
-            'codex-sessions-converter = "codex_sessions_converter.converter:main"',
-            pyproject,
-        )
+        self.assertIn('codex-sessions = "codex_sessions.cli:main"', pyproject)
+        self.assertEqual(pyproject.count('codex-sessions = "codex_sessions.cli:main"'), 1)
 
     def test_cli_prog_prefers_short_name(self) -> None:
         self.assertEqual(cli_prog_from_argv0("codex-sessions.exe"), "codex-sessions")
-        self.assertEqual(
-            cli_prog_from_argv0("codex-sessions-converter.exe"),
-            "codex-sessions-converter",
-        )
-        self.assertEqual(cli_prog_from_argv0("converter.py"), "codex-sessions")
+        self.assertEqual(cli_prog_from_argv0("anything.exe"), "codex-sessions")
+        self.assertEqual(cli_prog_from_argv0("script.py"), "codex-sessions")
 
     def test_yaml_conversion_redacts_encrypted_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -865,7 +859,7 @@ class ConverterTests(unittest.TestCase):
                             "role": "user",
                             "content": (
                                 "# Context from my IDE setup:\n\n"
-                                "## Active file: converter.py\n\n"
+                                "## Active file: cli.py\n\n"
                                 "## My request for Codex:\n"
                                 "Please repair the index title."
                             ),
@@ -897,7 +891,7 @@ class ConverterTests(unittest.TestCase):
                             "type": "user_message",
                             "message": (
                                 "# Context from my IDE setup:\n\n"
-                                "## Active file: converter.py\n\n"
+                                "## Active file: cli.py\n\n"
                                 "## My request for Codex:\n"
                                 "Please title this event message."
                             ),
@@ -975,7 +969,7 @@ class ConverterTests(unittest.TestCase):
             self.assertTrue(search_cache_path(codex_home).exists())
 
             with patch(
-                "codex_sessions_converter.session_documents.iter_jsonl_objects",
+                "codex_sessions.sessions.documents.iter_jsonl_objects",
                 side_effect=AssertionError("list should reuse cached session metadata"),
             ):
                 second_lines = list_session_lines(codex_home)
@@ -1310,7 +1304,7 @@ class ConverterTests(unittest.TestCase):
             )
 
             with patch(
-                "codex_sessions_converter.session_index_workflows.reset_codex_state_cache",
+                "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
                 side_effect=OSError("locked"),
             ):
                 with self.assertRaises(SystemExit) as raised:
@@ -1538,7 +1532,7 @@ class ConverterTests(unittest.TestCase):
             original_index = index_path.read_text(encoding="utf-8")
 
             with patch(
-                "codex_sessions_converter.session_index_workflows.reset_codex_state_cache",
+                "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
                 side_effect=OSError("locked"),
             ):
                 with self.assertRaises(SystemExit) as raised:
@@ -1849,7 +1843,7 @@ class ConverterTests(unittest.TestCase):
             target_path = codex_home / "sessions" / "2026" / "04" / "30" / source_path.name
 
             with patch(
-                "codex_sessions_converter.session_transfer.reset_codex_state_cache",
+                "codex_sessions.sessions.transfer.reset_codex_state_cache",
                 side_effect=OSError("locked"),
             ):
                 with self.assertRaises(SystemExit) as raised:
@@ -3097,7 +3091,7 @@ class ConverterTests(unittest.TestCase):
     def test_color_auto_forces_terminal_for_git_bash_pipe(self) -> None:
         git_bash_env = {"TERM": "xterm-256color", "MSYSTEM": "MINGW64"}
         with patch(
-            "codex_sessions_converter.search_output.is_windows_pipe_stream",
+            "codex_sessions.search.output.is_windows_pipe_stream",
             return_value=True,
         ):
             self.assertEqual(
@@ -3108,7 +3102,7 @@ class ConverterTests(unittest.TestCase):
     def test_color_auto_does_not_force_for_git_bash_disk_redirect(self) -> None:
         git_bash_env = {"TERM": "xterm-256color", "MSYSTEM": "MINGW64"}
         with patch(
-            "codex_sessions_converter.search_output.is_windows_pipe_stream",
+            "codex_sessions.search.output.is_windows_pipe_stream",
             return_value=False,
         ):
             self.assertEqual(
@@ -3170,7 +3164,7 @@ class ConverterTests(unittest.TestCase):
             self.assertTrue(search_cache_path(codex_home).exists())
 
             with patch(
-                "codex_sessions_converter.session_documents.iter_jsonl_objects",
+                "codex_sessions.sessions.documents.iter_jsonl_objects",
                 side_effect=AssertionError("cache should avoid reparsing rollout JSONL"),
             ):
                 buffer = StringIO()

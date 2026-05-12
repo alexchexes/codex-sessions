@@ -4,8 +4,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from codex_sessions_converter.json_streams import iter_jsonl_objects
-from codex_sessions_converter.session_documents import sanitize
+from codex_sessions.core.json_streams import iter_jsonl_objects
+from codex_sessions.sessions.documents import sanitize
 
 SIMPLE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 

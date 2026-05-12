@@ -1,8 +1,8 @@
 import unittest
 from io import StringIO
 
-from codex_sessions_converter.search import SearchLine
-from codex_sessions_converter.search_output import (
+from codex_sessions.search.core import SearchLine
+from codex_sessions.search.output import (
     console_color_options,
     encode_for_output,
     text_with_highlights,

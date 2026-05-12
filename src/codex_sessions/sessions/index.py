@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from codex_sessions_converter.codex_state import temp_path_for
-from codex_sessions_converter.json_streams import iter_concatenated_json_objects
-from codex_sessions_converter.timestamps import parse_timestamp
+from codex_sessions.codex.state import temp_path_for
+from codex_sessions.core.json_streams import iter_concatenated_json_objects
+from codex_sessions.core.timestamps import parse_timestamp
 
 SESSION_ID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"

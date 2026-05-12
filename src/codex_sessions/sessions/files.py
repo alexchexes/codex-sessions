@@ -2,9 +2,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from codex_sessions_converter.json_streams import iter_jsonl_objects
-from codex_sessions_converter.session_index import SESSION_ID_RE
-from codex_sessions_converter.timestamps import parse_timestamp
+from codex_sessions.core.json_streams import iter_jsonl_objects
+from codex_sessions.core.timestamps import parse_timestamp
+from codex_sessions.sessions.index import SESSION_ID_RE
 
 
 @dataclass(frozen=True)

@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from codex_sessions_converter.codex_state import StateCacheBackup, temp_path_for
-from codex_sessions_converter.json_streams import iter_jsonl_objects
-from codex_sessions_converter.session_index import normalize_session_id
+from codex_sessions.codex.state import StateCacheBackup, temp_path_for
+from codex_sessions.core.json_streams import iter_jsonl_objects
+from codex_sessions.sessions.index import normalize_session_id
 
 MAX_EXPORT_TITLE_SLUG_CHARS = 80
 ROLLOUT_FILENAME_DATE_RE = re.compile(r"^rollout-(\d{4})-(\d{2})-(\d{2})T")

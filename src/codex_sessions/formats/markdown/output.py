@@ -2,16 +2,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
-from codex_sessions_converter.json_streams import iter_jsonl_objects
-from codex_sessions_converter.markdown_formatting import (
+from codex_sessions.core.json_streams import iter_jsonl_objects
+from codex_sessions.formats.markdown.formatting import (
     fenced_block,
     render_json_block_content,
     render_markdown_table,
 )
-from codex_sessions_converter.markdown_images import MarkdownImageHandler
-from codex_sessions_converter.markdown_tools import render_tool_call, render_tool_output
-from codex_sessions_converter.message_content import content_to_text, is_injected_user_context
-from codex_sessions_converter.session_documents import sanitize
+from codex_sessions.formats.markdown.images import MarkdownImageHandler
+from codex_sessions.formats.markdown.message_content import (
+    content_to_text,
+    is_injected_user_context,
+)
+from codex_sessions.formats.markdown.tools import render_tool_call, render_tool_output
+from codex_sessions.sessions.documents import sanitize
 
 
 @dataclass(frozen=True)

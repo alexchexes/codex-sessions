@@ -3,8 +3,12 @@ import os
 from pathlib import Path
 from typing import Any
 
-from codex_sessions_converter.errors import CliError
-from codex_sessions_converter.markdown_tools import (
+from codex_sessions.errors import CliError
+from codex_sessions.formats.markdown.message_content import (
+    content_to_text,
+    searchable_user_message_text,
+)
+from codex_sessions.formats.markdown.tools import (
     DEFAULT_TOOL_PREVIEW_CHARS,
     normalized_tool_short_name,
     parse_json_object_maybe,
@@ -12,17 +16,7 @@ from codex_sessions_converter.markdown_tools import (
     tool_display_name,
     truncate_preview,
 )
-from codex_sessions_converter.message_content import (
-    content_to_text,
-    searchable_user_message_text,
-)
-from codex_sessions_converter.search import (
-    SearchOptions,
-    SearchResult,
-    compile_search_pattern,
-    search_matching_lines,
-)
-from codex_sessions_converter.search_cache import (
+from codex_sessions.search.cache import (
     cached_search_document,
     prune_missing_search_cache_entries,
     read_search_cache,
@@ -31,25 +25,31 @@ from codex_sessions_converter.search_cache import (
     search_cache_path,
     write_search_cache,
 )
-from codex_sessions_converter.session_display import (
+from codex_sessions.search.core import (
+    SearchOptions,
+    SearchResult,
+    compile_search_pattern,
+    search_matching_lines,
+)
+from codex_sessions.sessions.display import (
     session_info_for_search,
     session_info_title_match_spans,
     session_title_for_search,
 )
-from codex_sessions_converter.session_documents import (
+from codex_sessions.sessions.documents import (
     SearchDocument,
     infer_search_document_title,
 )
-from codex_sessions_converter.session_documents import (
+from codex_sessions.sessions.documents import (
     build_search_document as build_session_document,
 )
-from codex_sessions_converter.session_files import (
+from codex_sessions.sessions.files import (
     SessionFile,
     discover_session_paths,
     format_session_file_path,
     session_id_from_path,
 )
-from codex_sessions_converter.session_index import normalize_session_id, read_session_index
+from codex_sessions.sessions.index import normalize_session_id, read_session_index
 
 
 def parse_embedded_json(value: str) -> Any:
