@@ -19,7 +19,6 @@ from codex_sessions_converter.conversion_paths import (  # noqa: E402
 )
 from codex_sessions_converter.converter import (  # noqa: E402
     cli_prog_from_argv0,
-    list_session_lines,
     main,
     parse_markdown_include,
     resolve_markdown_tool_mode,
@@ -38,6 +37,7 @@ from codex_sessions_converter.session_display import (  # noqa: E402
     format_local_timestamp,
     local_timezone_offset_label,
 )
+from codex_sessions_converter.session_index_workflows import list_session_lines  # noqa: E402
 from codex_sessions_converter.timestamps import parse_timestamp  # noqa: E402
 from codex_sessions_converter.yaml_output import convert_jsonl_to_yaml_stream  # noqa: E402
 
@@ -1308,7 +1308,7 @@ class ConverterTests(unittest.TestCase):
             )
 
             with patch(
-                "codex_sessions_converter.converter.reset_codex_state_cache",
+                "codex_sessions_converter.session_index_workflows.reset_codex_state_cache",
                 side_effect=OSError("locked"),
             ):
                 with self.assertRaises(SystemExit) as raised:
@@ -1536,7 +1536,7 @@ class ConverterTests(unittest.TestCase):
             original_index = index_path.read_text(encoding="utf-8")
 
             with patch(
-                "codex_sessions_converter.converter.reset_codex_state_cache",
+                "codex_sessions_converter.session_index_workflows.reset_codex_state_cache",
                 side_effect=OSError("locked"),
             ):
                 with self.assertRaises(SystemExit) as raised:
