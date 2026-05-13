@@ -177,7 +177,7 @@ one concrete ID.
 Export one session as a transferable rollout JSONL file:
 
 ```bash
-codex-sessions export 019ddf68-2bc0-75e2-aecb-22f49ca63c98 ./exports/
+codex-sessions export 019ddf68-2bc0-75e2-aecb-22f49ca63c98 -o ./exports/
 ```
 
 The exported filename is readable by default:
@@ -189,13 +189,22 @@ The exported filename is readable by default:
 You can also use an exact current title or write to a specific file path:
 
 ```bash
-codex-sessions export "Fix auto parametrization bug" ./session.jsonl
+codex-sessions export "Fix auto parametrization bug" -o ./session.jsonl
+```
+
+Export multiple sessions to a directory or zip archive:
+
+```bash
+codex-sessions export --all -o ./exports/
+codex-sessions export --updated-after 2026-05-01 -o ./exports.zip
+codex-sessions export --all --except 019ddf68-2bc0-75e2-aecb-22f49ca63c98 -o ./exports/
 ```
 
 `export` writes a rollout copy without changing Codex state. If the current
 `session_index.jsonl` title differs from the rollout title event, the exported
 copy is updated so `import` can preserve that title on another machine. Existing
-output files are refused unless `--force` is passed.
+output files, colliding directory entries, and existing zip archives are refused
+unless `--force` is passed.
 
 Import a bare rollout JSONL file into Codex home:
 

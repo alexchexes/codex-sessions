@@ -42,14 +42,17 @@ from codex_sessions.sessions.paths import (
 )
 from codex_sessions.sessions.rollout import (
     ExportSessionPlan,
+    ExportSessionsPlan,
     ImportSessionPlan,
     format_fingerprint,
 )
 from codex_sessions.sessions.transfer import (
-    export_session,
+    EXPORT_OUTPUT_DIRECTORY,
+    EXPORT_OUTPUT_ZIP,
+    export_sessions,
     import_bare_rollout,
     plan_bare_rollout_import,
-    plan_session_export,
+    plan_sessions_export,
 )
 
 __version__ = "0.1.0"
@@ -386,7 +389,7 @@ def export_rollout_action_label(plan: ExportSessionPlan) -> str:
     return "copy unchanged"
 
 
-def format_export_plan_lines(plan: ExportSessionPlan) -> list[str]:
+def format_export_session_plan_lines(plan: ExportSessionPlan) -> list[str]:
     lines = [
         f"Export source: {plan.source_path}",
         f"Session: {plan.session_id} - {plan.thread_name}",
@@ -404,6 +407,39 @@ def format_export_plan_lines(plan: ExportSessionPlan) -> list[str]:
     return lines
 
 
+def export_destination_label(bundle_plan: ExportSessionsPlan, plan: ExportSessionPlan) -> str:
+    if bundle_plan.output_kind == EXPORT_OUTPUT_ZIP:
+        return f"{bundle_plan.output_path}!{plan.output_path.as_posix()}"
+    return str(plan.output_path)
+
+
+def format_export_plan_lines(plan: ExportSessionsPlan) -> list[str]:
+    if (
+        len(plan.session_plans) == 1
+        and plan.output_kind != EXPORT_OUTPUT_ZIP
+        and not plan.filtered_out_count
+    ):
+        return format_export_session_plan_lines(plan.session_plans[0])
+
+    lines = [f"Sessions selected: {len(plan.session_plans)}"]
+    if plan.filtered_out_count:
+        lines.append(f"Sessions filtered out: {plan.filtered_out_count}")
+    if plan.output_kind == EXPORT_OUTPUT_ZIP:
+        lines.append(f"Output zip: {plan.output_path}")
+        if plan.output_path is not None and plan.output_path.exists() and plan.force:
+            lines.append("Overwrite zip: yes")
+    elif plan.output_kind == EXPORT_OUTPUT_DIRECTORY:
+        lines.append(f"Output directory: {plan.output_path}")
+
+    lines.append("Would export:")
+    for session_plan in plan.session_plans:
+        lines.append(
+            f"- {session_plan.session_id} - {session_plan.thread_name} -> "
+            f"{export_destination_label(plan, session_plan)}"
+        )
+    return lines
+
+
 def run_export_command(args: argparse.Namespace) -> int:
     codex_home = args.codex_home.expanduser().resolve()
     session_index_path = (
@@ -417,12 +453,19 @@ def run_export_command(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         try:
-            plan = plan_session_export(
-                target=args.target,
+            plan = plan_sessions_export(
+                targets=args.targets,
                 codex_home=codex_home,
                 output=args.output,
                 session_index_path=session_index_path,
                 sessions_dir=sessions_dir,
+                all_sessions=args.all,
+                only=args.only,
+                exclude=args.exclude,
+                started_after=args.started_after,
+                started_before=args.started_before,
+                updated_after=args.updated_after,
+                updated_before=args.updated_before,
                 force=args.force,
             )
         except (CliError, ValueError) as exc:
@@ -432,30 +475,61 @@ def run_export_command(args: argparse.Namespace) -> int:
         return 0
 
     try:
-        result = export_session(
-            target=args.target,
+        result = export_sessions(
+            targets=args.targets,
             codex_home=codex_home,
             output=args.output,
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
+            all_sessions=args.all,
+            only=args.only,
+            exclude=args.exclude,
+            started_after=args.started_after,
+            started_before=args.started_before,
+            updated_after=args.updated_after,
+            updated_before=args.updated_before,
             force=args.force,
         )
     except (CliError, ValueError, OSError) as exc:
         raise SystemExit(str(exc)) from exc
 
     plan = result.plan
+    if len(plan.session_plans) != 1:
+        print(f"Exported sessions: {len(plan.session_plans)}")
+        if plan.filtered_out_count:
+            print(f"Sessions filtered out: {plan.filtered_out_count}")
+        if plan.output_kind == EXPORT_OUTPUT_ZIP:
+            print(f"Output zip: {plan.output_path}")
+        elif plan.output_kind == EXPORT_OUTPUT_DIRECTORY:
+            print(f"Output directory: {plan.output_path}")
+        for session_plan in plan.session_plans:
+            print(
+                encode_for_output(
+                    f"- {session_plan.session_id} - {session_plan.thread_name} -> "
+                    f"{export_destination_label(plan, session_plan)}",
+                    sys.stdout.encoding,
+                )
+            )
+        return 0
+
+    session_plan = plan.session_plans[0]
     print(
         encode_for_output(
-            f"Exported session: {plan.session_id} - {plan.thread_name}",
+            f"Exported session: {session_plan.session_id} - {session_plan.thread_name}",
             sys.stdout.encoding,
         )
     )
+    if plan.filtered_out_count:
+        print(f"Sessions filtered out: {plan.filtered_out_count}")
+    destination = export_destination_label(plan, session_plan)
     print(
-        encode_for_output(f"Rollout: {plan.source_path} -> {plan.output_path}", sys.stdout.encoding)
+        encode_for_output(
+            f"Rollout: {session_plan.source_path} -> {destination}", sys.stdout.encoding
+        )
     )
     print(
         encode_for_output(
-            f"Rollout action: {export_rollout_action_label(plan)}", sys.stdout.encoding
+            f"Rollout action: {export_rollout_action_label(session_plan)}", sys.stdout.encoding
         )
     )
     return 0

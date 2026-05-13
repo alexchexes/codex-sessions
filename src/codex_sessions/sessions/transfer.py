@@ -1,5 +1,9 @@
+import json
 import shutil
-from collections.abc import Sequence
+import zipfile
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +16,9 @@ from codex_sessions.codex.state import (
     reset_codex_state_cache,
     restore_file_backup,
     restore_session_index_backup,
+    temp_path_for,
 )
+from codex_sessions.core.timestamps import parse_timestamp
 from codex_sessions.errors import CliError
 from codex_sessions.search.sessions import build_search_document
 from codex_sessions.sessions.documents import SearchDocument, inferred_thread_name
@@ -24,6 +30,7 @@ from codex_sessions.sessions.files import (
 from codex_sessions.sessions.index import (
     format_session_index_timestamp,
     is_session_id,
+    matching_session_index_records,
     normalize_session_id,
     resolve_session_index_record,
     session_index_record_id,
@@ -34,17 +41,32 @@ from codex_sessions.sessions.index import (
 from codex_sessions.sessions.rollout import (
     ExportSessionPlan,
     ExportSessionResult,
+    ExportSessionsPlan,
+    ExportSessionsResult,
     ImportSessionPlan,
     ImportSessionResult,
     export_title_slug,
     file_fingerprint,
     format_fingerprint,
+    output_arg_looks_like_directory,
     read_rollout_records,
     renamed_rollout_records,
     resolve_export_output_path,
     rollout_filename_date,
     write_rollout_records,
 )
+
+EXPORT_OUTPUT_FILE = "file"
+EXPORT_OUTPUT_DIRECTORY = "directory"
+EXPORT_OUTPUT_ZIP = "zip"
+
+
+@dataclass(frozen=True)
+class ExportSessionCandidate:
+    source_path: Path
+    session_id: str
+    thread_name: str
+    document: SearchDocument
 
 
 def import_target_date(source_path: Path, document: SearchDocument) -> tuple[str, str, str]:
@@ -356,6 +378,345 @@ def export_session_index_record(
     return session_id, record
 
 
+def export_filter_timestamp(value: str | None, option_name: str) -> datetime | None:
+    if value is None:
+        return None
+    parsed = parse_timestamp(value)
+    if parsed is None:
+        raise CliError(f"Invalid {option_name} value: {value}")
+    return parsed
+
+
+def export_session_candidates(
+    codex_home: Path,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+) -> list[ExportSessionCandidate]:
+    resolved_sessions_dir = sessions_dir or codex_home / "sessions"
+    if not resolved_sessions_dir.exists():
+        raise CliError(f"Sessions directory not found: {resolved_sessions_dir}")
+
+    index_path = session_index_path or codex_home / "session_index.jsonl"
+    index_records = session_index_records(index_path) if index_path.exists() else []
+    index_records_by_id: dict[str, dict[str, Any]] = {}
+    for record in index_records:
+        if not isinstance(record, dict):
+            continue
+        record_id = session_index_record_id(record)
+        if record_id:
+            index_records_by_id.setdefault(normalize_session_id(record_id), record)
+
+    candidates: list[ExportSessionCandidate] = []
+    candidates_by_id: dict[str, ExportSessionCandidate] = {}
+    duplicate_sources_by_id: dict[str, list[Path]] = {}
+    for session_file in discover_session_files(resolved_sessions_dir):
+        source_path = session_file.path.resolve()
+        document = build_search_document(source_path, "...")
+        session_id = document.session_id or session_file.session_id
+        if session_id is None:
+            raise CliError(f"Cannot infer session id from rollout: {source_path}")
+        normalized_id = normalize_session_id(session_id)
+        index_record = index_records_by_id.get(normalized_id)
+        index_thread_name = (
+            session_index_record_thread_name(index_record) if index_record is not None else ""
+        )
+        thread_name = index_thread_name or inferred_thread_name(document)
+        if not thread_name:
+            raise CliError(f"Exported session title must not be empty: {source_path}")
+
+        candidate = ExportSessionCandidate(
+            source_path=source_path,
+            session_id=session_id,
+            thread_name=thread_name,
+            document=document,
+        )
+        existing_candidate = candidates_by_id.get(normalized_id)
+        if existing_candidate is not None:
+            duplicate_sources_by_id.setdefault(
+                normalized_id, [existing_candidate.source_path]
+            ).append(source_path)
+            continue
+        candidates_by_id[normalized_id] = candidate
+        candidates.append(candidate)
+
+    if duplicate_sources_by_id:
+        normalized_id, sources = next(iter(duplicate_sources_by_id.items()))
+        rendered_sources = ", ".join(str(source) for source in sources)
+        raise CliError(
+            f"Multiple Codex session files found for ID {normalized_id}: {rendered_sources}"
+        )
+
+    return candidates
+
+
+def candidate_by_session_id(
+    candidates: Sequence[ExportSessionCandidate], session_id: str
+) -> ExportSessionCandidate:
+    normalized_id = normalize_session_id(session_id)
+    for candidate in candidates:
+        if normalize_session_id(candidate.session_id) == normalized_id:
+            return candidate
+    raise CliError(f"No Codex session file found for ID: {session_id}")
+
+
+def candidate_for_export_selector(
+    target: str,
+    candidates: Sequence[ExportSessionCandidate],
+    session_index_path: Path,
+) -> ExportSessionCandidate:
+    if is_session_id(target):
+        return candidate_by_session_id(candidates, target)
+
+    index_records = session_index_records(session_index_path) if session_index_path.exists() else []
+    matches = matching_session_index_records(index_records, target)
+    if len(matches) > 1:
+        resolve_session_index_record(index_records, target)
+    if len(matches) == 1:
+        session_id = session_index_record_id(matches[0][1])
+        if session_id is None:
+            raise CliError(f"Matched session_index.jsonl entry has no session id: {target}")
+        return candidate_by_session_id(candidates, session_id)
+
+    title_matches = [candidate for candidate in candidates if candidate.thread_name == target]
+    if len(title_matches) == 1:
+        return title_matches[0]
+    if not title_matches:
+        raise CliError(f"No Codex session matched title: {target}")
+
+    rendered_matches = ", ".join(candidate.session_id for candidate in title_matches)
+    raise CliError(
+        f"Multiple Codex sessions matched title {target!r}: {rendered_matches}. Re-run with one ID."
+    )
+
+
+def unique_export_candidates(
+    candidates: Iterable[ExportSessionCandidate],
+) -> list[ExportSessionCandidate]:
+    unique_candidates: list[ExportSessionCandidate] = []
+    seen_ids: set[str] = set()
+    for candidate in candidates:
+        normalized_id = normalize_session_id(candidate.session_id)
+        if normalized_id in seen_ids:
+            continue
+        seen_ids.add(normalized_id)
+        unique_candidates.append(candidate)
+    return unique_candidates
+
+
+def export_candidate_updated_at(candidate: ExportSessionCandidate) -> datetime | None:
+    return candidate.document.ended_at or candidate.document.started_at
+
+
+def export_candidate_matches_timestamp_filters(
+    candidate: ExportSessionCandidate,
+    *,
+    started_after: datetime | None,
+    started_before: datetime | None,
+    updated_after: datetime | None,
+    updated_before: datetime | None,
+) -> bool:
+    started_at = candidate.document.started_at
+    updated_at = export_candidate_updated_at(candidate)
+
+    if started_after is not None and (started_at is None or started_at < started_after):
+        return False
+    if started_before is not None and (started_at is None or started_at >= started_before):
+        return False
+    if updated_after is not None and (updated_at is None or updated_at < updated_after):
+        return False
+    return not (updated_before is not None and (updated_at is None or updated_at >= updated_before))
+
+
+def selected_export_candidates(
+    *,
+    targets: Sequence[str],
+    only: Sequence[str],
+    exclude: Sequence[str],
+    all_sessions: bool,
+    codex_home: Path,
+    session_index_path: Path,
+    sessions_dir: Path,
+    started_after: datetime | None,
+    started_before: datetime | None,
+    updated_after: datetime | None,
+    updated_before: datetime | None,
+) -> tuple[list[ExportSessionCandidate], int]:
+    if targets and only:
+        raise CliError("Use either positional export targets or --only, not both.")
+    if all_sessions and (targets or only):
+        raise CliError("Use either --all or explicit export targets, not both.")
+
+    has_timestamp_filters = any(
+        timestamp is not None
+        for timestamp in (started_after, started_before, updated_after, updated_before)
+    )
+    candidates = export_session_candidates(
+        codex_home=codex_home,
+        session_index_path=session_index_path,
+        sessions_dir=sessions_dir,
+    )
+    selector_targets = tuple(targets or only)
+    if selector_targets:
+        base_candidates = unique_export_candidates(
+            candidate_for_export_selector(target, candidates, session_index_path)
+            for target in selector_targets
+        )
+    elif all_sessions or has_timestamp_filters:
+        base_candidates = candidates
+    else:
+        raise CliError("Export requires a session target, --only, --all, or a time filter.")
+
+    excluded_ids = {
+        normalize_session_id(
+            candidate_for_export_selector(target, candidates, session_index_path).session_id
+        )
+        for target in exclude
+    }
+
+    selected_candidates = [
+        candidate
+        for candidate in base_candidates
+        if normalize_session_id(candidate.session_id) not in excluded_ids
+        and export_candidate_matches_timestamp_filters(
+            candidate,
+            started_after=started_after,
+            started_before=started_before,
+            updated_after=updated_after,
+            updated_before=updated_before,
+        )
+    ]
+    return selected_candidates, len(base_candidates) - len(selected_candidates)
+
+
+def export_output_kind(output: Path | None, session_count: int) -> str:
+    if output is None:
+        if session_count == 1:
+            return EXPORT_OUTPUT_FILE
+        raise CliError("Bulk export requires --output/-o with a directory or .zip path.")
+
+    expanded_output = output.expanduser()
+    if expanded_output.exists() and expanded_output.is_dir():
+        return EXPORT_OUTPUT_DIRECTORY
+    if expanded_output.suffix.lower() == ".zip":
+        return EXPORT_OUTPUT_ZIP
+    if output_arg_looks_like_directory(output):
+        return EXPORT_OUTPUT_DIRECTORY
+    if session_count == 1:
+        return EXPORT_OUTPUT_FILE
+    raise CliError("Bulk export output must be a directory or .zip path.")
+
+
+def export_candidate_default_filename(candidate: ExportSessionCandidate) -> str:
+    return default_export_filename(
+        candidate.source_path, candidate.document, candidate.session_id, candidate.thread_name
+    )
+
+
+def export_plan_for_candidate(
+    candidate: ExportSessionCandidate,
+    output_path: Path,
+    *,
+    force: bool,
+    check_output_file: bool,
+) -> ExportSessionPlan:
+    source_path = candidate.source_path.resolve()
+    _, rollout_will_be_rewritten = prepare_import_rollout_records(
+        source_path, candidate.session_id, candidate.thread_name
+    )
+    output_exists = output_path.exists() if check_output_file else False
+    if check_output_file and output_exists:
+        if output_path.resolve() == source_path:
+            raise CliError(f"Export output path is the source rollout file: {output_path}")
+        if not force:
+            raise CliError(f"Output file already exists: {output_path}. Use --force to overwrite.")
+
+    return ExportSessionPlan(
+        source_path=source_path,
+        output_path=output_path,
+        session_id=candidate.session_id,
+        thread_name=candidate.thread_name,
+        started_at=candidate.document.started_at,
+        ended_at=candidate.document.ended_at,
+        rollout_will_be_rewritten=rollout_will_be_rewritten,
+        overwrite=output_exists,
+    )
+
+
+def export_output_path_for_candidate(
+    candidate: ExportSessionCandidate, output: Path | None, output_kind: str
+) -> Path:
+    default_filename = export_candidate_default_filename(candidate)
+    if output_kind == EXPORT_OUTPUT_FILE:
+        return resolve_export_output_path(output, default_filename)
+    if output_kind == EXPORT_OUTPUT_DIRECTORY:
+        output_dir = output.expanduser() if output is not None else Path.cwd()
+        return output_dir / default_filename
+    return Path(default_filename)
+
+
+def plan_sessions_export(
+    *,
+    targets: Sequence[str],
+    codex_home: Path,
+    output: Path | None = None,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    all_sessions: bool = False,
+    only: Sequence[str] = (),
+    exclude: Sequence[str] = (),
+    started_after: str | None = None,
+    started_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    force: bool = False,
+) -> ExportSessionsPlan:
+    resolved_sessions_dir = sessions_dir or codex_home / "sessions"
+    index_path = session_index_path or codex_home / "session_index.jsonl"
+    selected_candidates, filtered_out_count = selected_export_candidates(
+        targets=targets,
+        only=only,
+        exclude=exclude,
+        all_sessions=all_sessions,
+        codex_home=codex_home,
+        session_index_path=index_path,
+        sessions_dir=resolved_sessions_dir,
+        started_after=export_filter_timestamp(started_after, "--started-after"),
+        started_before=export_filter_timestamp(started_before, "--started-before"),
+        updated_after=export_filter_timestamp(updated_after, "--updated-after"),
+        updated_before=export_filter_timestamp(updated_before, "--updated-before"),
+    )
+    if not selected_candidates:
+        raise CliError("No sessions matched export selection.")
+    if output is None and (all_sessions or (not targets and not only)):
+        raise CliError("Bulk export requires --output/-o with a directory or .zip path.")
+
+    output_kind = export_output_kind(output, len(selected_candidates))
+    output_path = output.expanduser() if output is not None else None
+    if output_kind == EXPORT_OUTPUT_ZIP and output_path is not None:
+        if output_path.exists() and output_path.is_dir():
+            raise CliError(f"Export zip output is a directory: {output_path}")
+        if output_path.exists() and not force:
+            raise CliError(f"Output zip already exists: {output_path}. Use --force to replace.")
+
+    plans = tuple(
+        export_plan_for_candidate(
+            candidate,
+            export_output_path_for_candidate(candidate, output, output_kind),
+            force=force,
+            check_output_file=output_kind != EXPORT_OUTPUT_ZIP,
+        )
+        for candidate in selected_candidates
+    )
+
+    return ExportSessionsPlan(
+        session_plans=plans,
+        output_kind=output_kind,
+        output_path=output_path,
+        force=force,
+        filtered_out_count=filtered_out_count,
+    )
+
+
 def plan_session_export(
     target: str,
     codex_home: Path,
@@ -435,3 +796,87 @@ def export_session(
     else:
         shutil.copy2(plan.source_path, plan.output_path)
     return ExportSessionResult(plan=plan)
+
+
+def export_plan_jsonl_bytes(plan: ExportSessionPlan) -> bytes:
+    if plan.rollout_will_be_rewritten:
+        records, _ = prepare_import_rollout_records(
+            plan.source_path, plan.session_id, plan.thread_name
+        )
+        text = "".join(
+            json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+            for record in records
+        )
+        return text.encode("utf-8")
+    return plan.source_path.read_bytes()
+
+
+def write_export_plan_to_file(plan: ExportSessionPlan) -> None:
+    plan.output_path.parent.mkdir(parents=True, exist_ok=True)
+    if plan.rollout_will_be_rewritten:
+        records, _ = prepare_import_rollout_records(
+            plan.source_path, plan.session_id, plan.thread_name
+        )
+        write_rollout_records(plan.output_path, records)
+    else:
+        shutil.copy2(plan.source_path, plan.output_path)
+
+
+def write_export_plan_to_zip(plan: ExportSessionsPlan) -> None:
+    if plan.output_path is None:
+        raise CliError("Zip export requires an output path.")
+    plan.output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_path_for(plan.output_path)
+    try:
+        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for session_plan in plan.session_plans:
+                archive.writestr(
+                    session_plan.output_path.as_posix(),
+                    export_plan_jsonl_bytes(session_plan),
+                )
+        temp_path.replace(plan.output_path)
+    except OSError:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def export_sessions(
+    *,
+    targets: Sequence[str],
+    codex_home: Path,
+    output: Path | None = None,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    all_sessions: bool = False,
+    only: Sequence[str] = (),
+    exclude: Sequence[str] = (),
+    started_after: str | None = None,
+    started_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    force: bool = False,
+) -> ExportSessionsResult:
+    plan = plan_sessions_export(
+        targets=targets,
+        codex_home=codex_home,
+        output=output,
+        session_index_path=session_index_path,
+        sessions_dir=sessions_dir,
+        all_sessions=all_sessions,
+        only=only,
+        exclude=exclude,
+        started_after=started_after,
+        started_before=started_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        force=force,
+    )
+    if plan.output_kind == EXPORT_OUTPUT_ZIP:
+        write_export_plan_to_zip(plan)
+    else:
+        for session_plan in plan.session_plans:
+            write_export_plan_to_file(session_plan)
+    return ExportSessionsResult(plan=plan)

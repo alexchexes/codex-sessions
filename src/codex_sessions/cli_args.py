@@ -287,21 +287,75 @@ def parse_export_args(
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog=f"{prog} export",
-        description="Export one Codex session as a transferable rollout JSONL file.",
+        description="Export Codex sessions as transferable rollout JSONL files.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            '  codex-sessions export "Exact session title"\n'
+            "  codex-sessions export 019de863-c167-7942-9e39-9a3291b9bf55 -o ./exports/\n"
+            "  codex-sessions export --all -o ./exports/\n"
+            "  codex-sessions export --all --except 019de863... -o ./exports/\n"
+            "  codex-sessions export --updated-after 2026-05-01 -o ./exports.zip\n"
+        ),
     )
-    parser.add_argument("target", help="Session ID or exact session title to export.")
     parser.add_argument(
-        "output",
-        nargs="?",
+        "targets",
+        nargs="*",
+        help="Session IDs or exact session titles to export.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
         type=Path,
         help=(
-            "Output .jsonl path or directory. Defaults to a readable file in the current directory."
+            "Output .jsonl path, directory, or .zip path. "
+            "Single-session exports default to a readable file in the current directory."
         ),
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Export all sessions before applying filters.",
+    )
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="TARGET",
+        help="Session ID or exact title to include. May be repeated.",
+    )
+    parser.add_argument(
+        "--except",
+        dest="exclude",
+        action="append",
+        default=[],
+        metavar="TARGET",
+        help="Session ID or exact title to exclude. May be repeated.",
+    )
+    parser.add_argument(
+        "--started-after",
+        metavar="TIMESTAMP",
+        help="Keep sessions started at or after this ISO timestamp or YYYY-MM-DD date.",
+    )
+    parser.add_argument(
+        "--started-before",
+        metavar="TIMESTAMP",
+        help="Keep sessions started before this ISO timestamp or YYYY-MM-DD date.",
+    )
+    parser.add_argument(
+        "--updated-after",
+        metavar="TIMESTAMP",
+        help="Keep sessions last updated at or after this ISO timestamp or YYYY-MM-DD date.",
+    )
+    parser.add_argument(
+        "--updated-before",
+        metavar="TIMESTAMP",
+        help="Keep sessions last updated before this ISO timestamp or YYYY-MM-DD date.",
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite the output file if it already exists.",
+        help="Overwrite colliding output files or replace an existing zip archive.",
     )
     parser.add_argument(
         "--dry-run",
@@ -343,7 +397,7 @@ def parse_args(
             "             inspect missing session_index.jsonl entries\n\n"
             "  rename     rename a session_index.jsonl entry\n\n"
             "  import     import a bare rollout JSONL file\n\n"
-            "  export     export one session as a rollout JSONL file\n\n"
+            "  export     export sessions as rollout JSONL files\n\n"
             "Markdown include presets:\n"
             "  dialogue   visible user/Codex messages, reasoning, progress messages\n"
             "  default    dialogue plus tool calls and tool outputs\n"

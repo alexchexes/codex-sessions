@@ -60,6 +60,20 @@ class ExportSessionResult:
     plan: ExportSessionPlan
 
 
+@dataclass(frozen=True)
+class ExportSessionsPlan:
+    session_plans: tuple[ExportSessionPlan, ...]
+    output_kind: str
+    output_path: Path | None
+    force: bool
+    filtered_out_count: int
+
+
+@dataclass(frozen=True)
+class ExportSessionsResult:
+    plan: ExportSessionsPlan
+
+
 def file_fingerprint(path: Path) -> FileFingerprint:
     digest = hashlib.sha256()
     with path.open("rb") as src:
