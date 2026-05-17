@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -587,7 +587,7 @@ class CliTests(unittest.TestCase):
             output_path = Path(tmpdir) / "missing.yaml"
 
             with self.assertRaises(SystemExit) as raised:
-                main([str(missing_input), str(output_path)])
+                main([str(missing_input), "-o", str(output_path)])
 
             self.assertEqual(str(raised.exception), f"Input file not found: {missing_input}")
             self.assertFalse(output_path.exists())
@@ -625,12 +625,25 @@ class CliTests(unittest.TestCase):
 
             buffer = StringIO()
             with redirect_stdout(buffer):
-                result = main([session_id, str(output_dir), "--codex-home", str(codex_home)])
+                result = main([session_id, "-o", str(output_dir), "--codex-home", str(codex_home)])
 
             output_path = output_dir / f"{session_id}.yaml"
             self.assertEqual(result, 0)
             self.assertTrue(output_path.exists())
             self.assertIn(str(output_path), buffer.getvalue())
+
+    def test_conversion_rejects_positional_output_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.yaml"
+            write_jsonl(input_path, [{"type": "session_meta", "payload": {"id": "abc"}}])
+
+            with redirect_stderr(StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    main([str(input_path), str(output_path)])
+
+            self.assertEqual(raised.exception.code, 2)
+            self.assertFalse(output_path.exists())
 
     def test_md_flag_converts_to_markdown_without_output_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -58,7 +58,7 @@ The installed command is `codex-sessions`.
 Convert to YAML:
 
 ```bash
-codex-sessions sessions/YYYY/MM/DD/rollout.jsonl rollout.yaml
+codex-sessions sessions/YYYY/MM/DD/rollout.jsonl -o rollout.yaml
 ```
 
 Use YAML explicitly:
@@ -70,7 +70,7 @@ codex-sessions --yaml sessions/YYYY/MM/DD/rollout.jsonl
 Convert to Markdown:
 
 ```bash
-codex-sessions sessions/YYYY/MM/DD/rollout.jsonl rollout.md
+codex-sessions sessions/YYYY/MM/DD/rollout.jsonl -o rollout.md
 ```
 
 Use Markdown explicitly when no `.md` output path is supplied:
@@ -110,7 +110,7 @@ codex-sessions 019dd5ce-19e1-78c3-9313-325228ddd983
 Write the converted session to the current directory:
 
 ```bash
-codex-sessions 019dd5ce-19e1-78c3-9313-325228ddd983 ./
+codex-sessions 019dd5ce-19e1-78c3-9313-325228ddd983 -o ./
 ```
 
 Use a specific Codex home directory for session ID lookup and default output:
@@ -297,35 +297,35 @@ context from an earlier conversation.
 
 ```bash
 # Visible user/Codex messages, reasoning, and progress messages.
-codex-sessions --md-include dialogue input.jsonl output.md
+codex-sessions --md-include dialogue input.jsonl -o output.md
 
 # Default: dialogue plus concise tool call previews.
-codex-sessions --md-include default input.jsonl output.md
+codex-sessions --md-include default input.jsonl -o output.md
 
 # Add metadata tables such as turn_context and token_count.
-codex-sessions --md-include metadata input.jsonl output.md
+codex-sessions --md-include metadata input.jsonl -o output.md
 
 # Metadata plus raw unhandled records.
-codex-sessions --md-include full input.jsonl output.md
+codex-sessions --md-include full input.jsonl -o output.md
 ```
 
 `--md-tools` controls tool call/output detail:
 
 ```bash
 # Tool names and call IDs only.
-codex-sessions --md-tools names input.jsonl output.md
+codex-sessions --md-tools names input.jsonl -o output.md
 
 # Useful previews for known tool calls; unknown tools fall back to names.
-codex-sessions --md-tools smart input.jsonl output.md
+codex-sessions --md-tools smart input.jsonl -o output.md
 
 # Tool names plus truncated arguments and outputs.
-codex-sessions --md-tools preview input.jsonl output.md
+codex-sessions --md-tools preview input.jsonl -o output.md
 
 # Tune preview length.
-codex-sessions --md-tools preview --md-tool-preview-chars 1200 input.jsonl output.md
+codex-sessions --md-tools preview --md-tool-preview-chars 1200 input.jsonl -o output.md
 
 # Hide tools entirely.
-codex-sessions --md-tools none input.jsonl output.md
+codex-sessions --md-tools none input.jsonl -o output.md
 ```
 
 The default `--md-tools auto` follows `--md-include`: presets that include tools

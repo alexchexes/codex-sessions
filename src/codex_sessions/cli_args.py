@@ -423,8 +423,8 @@ def parse_args(
     )
     parser.add_argument("input", type=Path, help="Path to the source JSONL file.")
     parser.add_argument(
-        "output",
-        nargs="?",
+        "-o",
+        "--output",
         type=Path,
         help=("Path to the output file or directory. Defaults under <codex-home>/tmp."),
     )
