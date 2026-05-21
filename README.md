@@ -1,5 +1,18 @@
 # Codex sessions
 
+<!-- TOC -->
+
+- [Codex sessions](#codex-sessions)
+  - [Install](#install)
+  - [Usage](#usage)
+  - [Codex Skill](#codex-skill)
+  - [Markdown Detail](#markdown-detail)
+  - [Notes](#notes)
+  - [License](#license)
+  - [Development](#development)
+
+<!-- /TOC -->
+
 Inspect, search, repair, import/export, and convert Codex session files.
 
 It can turn session rollout files from a Codex home directory such as
@@ -28,14 +41,14 @@ pipx install git+https://github.com/alexchexes/codex-sessions.git
 Or install from a local checkout:
 
 ```bash
+git clone https://github.com/alexchexes/codex-sessions.git
+cd codex-sessions
+
+# If `pipx` is not installed yet, install it first:
+# python -m pip install --user pipx
+# python -m pipx ensurepath
+
 pipx install .
-```
-
-If `pipx` is not installed yet, install it first:
-
-```bash
-python -m pip install --user pipx
-python -m pipx ensurepath
 ```
 
 Or run it from a checkout without installing:
@@ -206,10 +219,13 @@ copy is updated so `import` can preserve that title on another machine. Existing
 output files, colliding directory entries, and existing zip archives are refused
 unless `--force` is passed.
 
-Import a bare rollout JSONL file into Codex home:
+Import a rollout JSONL file, a directory of rollout JSONL files, or an export
+zip into Codex home:
 
 ```bash
 codex-sessions import ./rollout-2026-04-30T18-20-39-019ddf68-2bc0-75e2-aecb-22f49ca63c98.jsonl
+codex-sessions import ./exports/
+codex-sessions import ./exports.zip
 ```
 
 Preview the target path and index action without writing anything:
@@ -218,13 +234,15 @@ Preview the target path and index action without writing anything:
 codex-sessions import --dry-run ./rollout.jsonl
 ```
 
-`import` copies the rollout into `sessions/YYYY/MM/DD/`, adds or updates the
-matching `session_index.jsonl` entry when needed, updates the rollout title
-event to match the chosen title, and resets Codex state cache after making
-backups under `backups/codex-sessions/`. Use `--name` to set the imported
-title explicitly. If the session rollout is already present, import refuses to
-continue and reports whether the existing file is identical or differs by size
-and SHA-256.
+`import` copies new rollouts into `sessions/YYYY/MM/DD/`, adds or updates the
+matching `session_index.jsonl` entries when needed, updates rollout title
+events to match the chosen titles, and resets Codex state cache once after
+making backups under `backups/codex-sessions/`. Use `--name` to set the
+imported title explicitly when importing one rollout file. Already-present
+identical sessions are skipped. Duplicate session IDs inside one import input
+are reported and refused as ambiguous. Existing sessions with different rollout
+content are reported as conflicts and are not overwritten; other safe sessions
+from the same bulk import are still imported.
 
 Search all Codex sessions:
 

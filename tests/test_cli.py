@@ -1715,7 +1715,7 @@ class CliTests(unittest.TestCase):
             )
             self.assertEqual(index_records[0]["thread_name"], "Infer this imported title.")
 
-    def test_import_refuses_identical_existing_rollout(self) -> None:
+    def test_import_skips_identical_existing_rollout(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             codex_home = root / "codex"
@@ -1736,13 +1736,18 @@ class CliTests(unittest.TestCase):
             write_jsonl(source_path, records)
             write_jsonl(target_path, records)
 
-            with self.assertRaises(SystemExit) as raised:
-                main(["import", "--codex-home", str(codex_home), str(source_path)])
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_path)])
 
-            self.assertIn("already imported with identical rollout file", str(raised.exception))
-            self.assertIn("sha256", str(raised.exception))
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("Imported: 0", output)
+            self.assertIn("Skipped identical: 1", output)
+            self.assertIn("SKIPPED identical", output)
+            self.assertIn("sha256", output)
 
-    def test_import_refuses_different_existing_rollout(self) -> None:
+    def test_import_reports_different_existing_rollout_as_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             codex_home = root / "codex"
@@ -1779,14 +1784,17 @@ class CliTests(unittest.TestCase):
                 ],
             )
 
-            with self.assertRaises(SystemExit) as raised:
-                main(["import", "--codex-home", str(codex_home), str(source_path)])
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_path)])
 
-            message = str(raised.exception)
-            self.assertIn("already imported, but rollout file differs", message)
-            self.assertIn("Existing:", message)
-            self.assertIn("import:", message)
-            self.assertIn("sha256", message)
+            output = buffer.getvalue()
+            self.assertEqual(result, 1)
+            self.assertIn("Conflicts: 1", output)
+            self.assertIn("CONFLICT", output)
+            self.assertIn("Existing:", output)
+            self.assertIn("Import:", output)
+            self.assertIn("sha256", output)
 
     def test_import_existing_index_without_rollout_uses_existing_index_title(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1882,7 +1890,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("Input file not found", str(raised.exception))
             self.assertFalse((codex_home / "session_index.jsonl").exists())
 
-    def test_import_reports_directory_input_without_writing_index(self) -> None:
+    def test_import_reports_empty_directory_input_without_writing_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             codex_home = root / "codex"
@@ -1892,7 +1900,7 @@ class CliTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as raised:
                 main(["import", "--codex-home", str(codex_home), str(source_dir)])
 
-            self.assertIn("Input path is not a file", str(raised.exception))
+            self.assertIn("No rollout JSONL files found in import directory", str(raised.exception))
             self.assertFalse((codex_home / "session_index.jsonl").exists())
 
     def test_import_reports_rollout_without_session_id(self) -> None:
@@ -1915,10 +1923,14 @@ class CliTests(unittest.TestCase):
                 ],
             )
 
-            with self.assertRaises(SystemExit) as raised:
-                main(["import", "--codex-home", str(codex_home), str(source_path)])
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_path)])
 
-            self.assertIn("Cannot infer session id from rollout", str(raised.exception))
+            output = buffer.getvalue()
+            self.assertEqual(result, 1)
+            self.assertIn("Failed: 1", output)
+            self.assertIn("Cannot infer session id from rollout", output)
             self.assertFalse((codex_home / "session_index.jsonl").exists())
 
     def test_import_non_rollout_filename_generates_codex_rollout_filename(self) -> None:
@@ -2007,6 +2019,234 @@ class CliTests(unittest.TestCase):
             self.assertEqual(index_records[0]["thread_name"], "Explicit import title")
             self.assertEqual(index_records[0]["extra"], "preserved")
             self.assertEqual(rollout_records[1]["payload"]["thread_name"], "Explicit import title")
+
+    def test_import_directory_imports_safe_sessions_and_reports_conflicts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+            state_db = codex_home / "state_5.sqlite"
+            state_db.write_text("state", encoding="utf-8")
+            new_id = "46464646-4646-4646-4646-464646464646"
+            identical_id = "47474747-4747-4747-4747-474747474747"
+            conflict_id = "48484848-4848-4848-4848-484848484848"
+
+            new_source = source_dir / f"rollout-2026-04-30T18-20-39-{new_id}.jsonl"
+            identical_source = source_dir / f"rollout-2026-04-30T18-21-39-{identical_id}.jsonl"
+            conflict_source = source_dir / f"rollout-2026-04-30T18-22-39-{conflict_id}.jsonl"
+            write_jsonl(
+                new_source,
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "thread_name_updated",
+                            "thread_id": new_id,
+                            "thread_name": "Bulk imported title",
+                        },
+                    }
+                ],
+            )
+            identical_records = [
+                {
+                    "timestamp": "2026-04-30T18:21:39Z",
+                    "type": "session_meta",
+                    "payload": {"id": identical_id},
+                }
+            ]
+            write_jsonl(identical_source, identical_records)
+            write_jsonl(sessions_day / identical_source.name, identical_records)
+            write_jsonl(
+                conflict_source,
+                [
+                    {
+                        "timestamp": "2026-04-30T18:22:39Z",
+                        "type": "session_meta",
+                        "payload": {"id": conflict_id},
+                    }
+                ],
+            )
+            write_jsonl(
+                sessions_day / conflict_source.name,
+                [
+                    {
+                        "timestamp": "2026-04-30T18:22:39Z",
+                        "type": "session_meta",
+                        "payload": {"id": conflict_id},
+                    },
+                    {
+                        "timestamp": "2026-04-30T18:23:39Z",
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": "different"},
+                    },
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_dir)])
+
+            output = buffer.getvalue()
+            imported_path = sessions_day / new_source.name
+            index_records = read_jsonl(codex_home / "session_index.jsonl")
+            state_backups = tuple(
+                (codex_home / "backups" / "codex-sessions").glob("*/state_5.sqlite")
+            )
+            self.assertEqual(result, 1)
+            self.assertIn("Imported: 1", output)
+            self.assertIn("Skipped identical: 1", output)
+            self.assertIn("Conflicts: 1", output)
+            self.assertTrue(imported_path.exists())
+            self.assertEqual(index_records[0]["id"], new_id)
+            self.assertFalse(state_db.exists())
+            self.assertEqual(len(state_backups), 1)
+
+    def test_import_directory_reports_duplicates_without_importing_duplicate_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            safe_id = "51515151-5151-5151-5151-515151515151"
+            duplicate_id = "52525252-5252-5252-5252-525252525252"
+            safe_source = source_dir / f"rollout-2026-04-30T18-20-39-{safe_id}.jsonl"
+            duplicate_first = source_dir / f"rollout-2026-04-30T18-21-39-{duplicate_id}.jsonl"
+            duplicate_second = source_dir / f"rollout-2026-04-30T18-22-39-{duplicate_id}.jsonl"
+            write_jsonl(
+                safe_source,
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "thread_name_updated",
+                            "thread_id": safe_id,
+                            "thread_name": "Safe duplicate import neighbor",
+                        },
+                    }
+                ],
+            )
+            write_jsonl(
+                duplicate_first,
+                [
+                    {
+                        "timestamp": "2026-04-30T18:21:39Z",
+                        "type": "session_meta",
+                        "payload": {"id": duplicate_id},
+                    }
+                ],
+            )
+            write_jsonl(
+                duplicate_second,
+                [
+                    {
+                        "timestamp": "2026-04-30T18:22:39Z",
+                        "type": "session_meta",
+                        "payload": {"id": duplicate_id},
+                    }
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_dir)])
+
+            output = buffer.getvalue()
+            imported_files = sorted((codex_home / "sessions").rglob("*.jsonl"))
+            index_records = read_jsonl(codex_home / "session_index.jsonl")
+            self.assertEqual(result, 1)
+            self.assertIn("Imported: 1", output)
+            self.assertIn("Duplicates: 1", output)
+            self.assertIn(f"DUPLICATE {duplicate_id}", output)
+            self.assertIn(str(duplicate_first.resolve()), output)
+            self.assertIn(str(duplicate_second.resolve()), output)
+            self.assertEqual([record["id"] for record in index_records], [safe_id])
+            self.assertEqual(len(imported_files), 1)
+            self.assertEqual(imported_files[0].name, safe_source.name)
+
+    def test_import_zip_imports_all_rollouts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_zip = root / "sessions.zip"
+            first_id = "49494949-4949-4949-4949-494949494949"
+            second_id = "50505050-5050-5050-5050-505050505050"
+            first_records = [
+                {
+                    "timestamp": "2026-04-30T18:20:39Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_name_updated",
+                        "thread_id": first_id,
+                        "thread_name": "First zip import",
+                    },
+                }
+            ]
+            second_records = [
+                {
+                    "timestamp": "2026-05-01T18:20:39Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_name_updated",
+                        "thread_id": second_id,
+                        "thread_name": "Second zip import",
+                    },
+                }
+            ]
+            with zipfile.ZipFile(source_zip, "w") as archive:
+                archive.writestr(
+                    f"2026-04-30--First-zip-import--{first_id}.jsonl",
+                    "\n".join(json.dumps(record) for record in first_records) + "\n",
+                )
+                archive.writestr(
+                    f"2026-05-01--Second-zip-import--{second_id}.jsonl",
+                    "\n".join(json.dumps(record) for record in second_records) + "\n",
+                )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_zip)])
+
+            output = buffer.getvalue()
+            imported_files = sorted((codex_home / "sessions").rglob("*.jsonl"))
+            index_records = read_jsonl(codex_home / "session_index.jsonl")
+            self.assertEqual(result, 0)
+            self.assertIn("Imported: 2", output)
+            self.assertEqual(len(imported_files), 2)
+            self.assertEqual(
+                [record["thread_name"] for record in index_records],
+                ["First zip import", "Second zip import"],
+            )
+
+    def test_import_zip_preserves_rollout_basename_for_filename_date_inference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_zip = root / "sessions.zip"
+            session_id = "53535353-5353-5353-5353-535353535353"
+            filename = f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            records = [{"type": "session_meta", "payload": {"id": session_id}}]
+            with zipfile.ZipFile(source_zip, "w") as archive:
+                archive.writestr(
+                    f"nested/{filename}",
+                    "\n".join(json.dumps(record) for record in records) + "\n",
+                )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_zip)])
+
+            output = buffer.getvalue()
+            imported_path = codex_home / "sessions" / "2026" / "04" / "30" / filename
+            index_records = read_jsonl(codex_home / "session_index.jsonl")
+            self.assertEqual(result, 0)
+            self.assertIn("Imported session:", output)
+            self.assertTrue(imported_path.exists())
+            self.assertEqual(index_records[0]["id"], session_id)
 
     def test_export_by_id_writes_readable_file_with_index_title_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

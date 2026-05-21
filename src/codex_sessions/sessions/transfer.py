@@ -1,14 +1,17 @@
 import json
 import shutil
+import tempfile
 import zipfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Generator, Iterable, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from codex_sessions.codex.state import (
     CodexStateError,
+    StateCacheBackup,
     backup_dir_for,
     backup_label,
     backup_session_index,
@@ -43,8 +46,15 @@ from codex_sessions.sessions.rollout import (
     ExportSessionResult,
     ExportSessionsPlan,
     ExportSessionsResult,
+    FileFingerprint,
+    ImportConflict,
+    ImportDuplicateSession,
+    ImportFailure,
     ImportSessionPlan,
     ImportSessionResult,
+    ImportSessionsPlan,
+    ImportSessionsResult,
+    ImportSkippedSession,
     export_title_slug,
     file_fingerprint,
     format_fingerprint,
@@ -67,6 +77,57 @@ class ExportSessionCandidate:
     session_id: str
     thread_name: str
     document: SearchDocument
+
+
+@dataclass(frozen=True)
+class ImportSourceOutcome:
+    session_id: str
+    source_path: Path
+    value: ImportSessionPlan | ImportSkippedSession | ImportConflict
+
+
+class ImportSkippedIdentical(CliError):
+    def __init__(
+        self,
+        *,
+        source_path: Path,
+        existing_path: Path,
+        session_id: str,
+        fingerprint: FileFingerprint,
+    ) -> None:
+        self.source_path = source_path
+        self.existing_path = existing_path
+        self.session_id = session_id
+        self.fingerprint = fingerprint
+        super().__init__(
+            "Session already imported with identical rollout file: "
+            f"{existing_path} ({format_fingerprint(fingerprint)})"
+        )
+
+
+class ImportRolloutConflict(CliError):
+    def __init__(
+        self,
+        *,
+        source_path: Path,
+        existing_path: Path,
+        session_id: str,
+        source_fingerprint: FileFingerprint,
+        existing_fingerprint: FileFingerprint | None,
+    ) -> None:
+        self.source_path = source_path
+        self.existing_path = existing_path
+        self.session_id = session_id
+        self.source_fingerprint = source_fingerprint
+        self.existing_fingerprint = existing_fingerprint
+        existing_fingerprint_text = (
+            format_fingerprint(existing_fingerprint) if existing_fingerprint else "UNKNOWN"
+        )
+        super().__init__(
+            "Session already imported, but rollout file differs. "
+            f"Existing: {existing_path} ({existing_fingerprint_text}); "
+            f"import: {source_path} ({format_fingerprint(source_fingerprint)})."
+        )
 
 
 def import_target_date(source_path: Path, document: SearchDocument) -> tuple[str, str, str]:
@@ -172,20 +233,18 @@ def plan_bare_rollout_import(
 
     if existing_rollout_path is not None:
         if source_fingerprint == existing_rollout_fingerprint:
-            raise CliError(
-                "Session already imported with identical rollout file: "
-                f"{existing_rollout_path} ({format_fingerprint(source_fingerprint)})"
+            raise ImportSkippedIdentical(
+                source_path=expanded_source_path,
+                existing_path=existing_rollout_path,
+                session_id=document.session_id,
+                fingerprint=source_fingerprint,
             )
-        existing_fingerprint = (
-            format_fingerprint(existing_rollout_fingerprint)
-            if existing_rollout_fingerprint
-            else "UNKNOWN"
-        )
-        raise CliError(
-            "Session already imported, but rollout file differs. "
-            f"Existing: {existing_rollout_path} "
-            f"({existing_fingerprint}); "
-            f"import: {expanded_source_path} ({format_fingerprint(source_fingerprint)})."
+        raise ImportRolloutConflict(
+            source_path=expanded_source_path,
+            existing_path=existing_rollout_path,
+            session_id=document.session_id,
+            source_fingerprint=source_fingerprint,
+            existing_fingerprint=existing_rollout_fingerprint,
         )
 
     index_path = session_index_path or codex_home / "session_index.jsonl"
@@ -244,10 +303,16 @@ def session_index_records_for_import(plan: ImportSessionPlan) -> list[Any]:
     records = (
         session_index_records(plan.session_index_path) if plan.session_index_path.exists() else []
     )
+    return apply_import_plan_to_session_index_records(records, plan)
+
+
+def apply_import_plan_to_session_index_records(
+    records: Sequence[Any], plan: ImportSessionPlan
+) -> list[Any]:
     existing_index_match = existing_index_record_for_id(records, plan.session_id)
     if plan.index_action == "add":
         if existing_index_match is not None:
-            return records
+            return list(records)
         return [*records, session_index_record_for_import_plan(plan)]
     if plan.index_action == "update":
         if existing_index_match is None:
@@ -258,7 +323,7 @@ def session_index_records_for_import(plan: ImportSessionPlan) -> list[Any]:
         updated_record["thread_name"] = plan.thread_name
         updated_records[record_index] = updated_record
         return updated_records
-    return records
+    return list(records)
 
 
 def copy_or_rewrite_import_rollout(plan: ImportSessionPlan) -> None:
@@ -296,18 +361,20 @@ def import_bare_rollout(
         backup_session_index(plan.session_index_path, backup_dir) if index_changed else None
     )
     rollout_written = False
+    attempted_rollout_path = False
     try:
         if index_changed:
             if updated_index_records is None:
                 raise CliError("Could not prepare session_index.jsonl update.")
             plan.session_index_path.parent.mkdir(parents=True, exist_ok=True)
             write_session_index_records(plan.session_index_path, updated_index_records)
+        attempted_rollout_path = True
         copy_or_rewrite_import_rollout(plan)
         rollout_written = True
         state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
     except (CliError, CodexStateError, OSError) as exc:
         try:
-            if rollout_written or plan.target_path.exists():
+            if rollout_written or attempted_rollout_path:
                 restore_file_backup(plan.target_path, None)
             if index_changed:
                 restore_session_index_backup(plan.session_index_path, index_backup_path)
@@ -325,6 +392,265 @@ def import_bare_rollout(
         session_index_backup_path=index_backup_path,
         state_cache_backups=state_cache_backups,
     )
+
+
+def zip_member_output_path(temp_dir: Path, index: int, member_name: str) -> Path:
+    member_path = PurePosixPath(member_name)
+    name = member_path.name or f"rollout-{index}.jsonl"
+    return temp_dir / f"{index:05d}" / name
+
+
+def extract_zip_rollout_sources(zip_path: Path, temp_dir: Path) -> list[Path]:
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            paths = []
+            for index, member in enumerate(archive.infolist(), start=1):
+                if member.is_dir() or not member.filename.lower().endswith(".jsonl"):
+                    continue
+                output_path = zip_member_output_path(temp_dir, index, member.filename)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(archive.read(member))
+                paths.append(output_path)
+    except zipfile.BadZipFile as exc:
+        raise CliError(f"Import zip is not a valid zip archive: {zip_path}") from exc
+    return paths
+
+
+@contextmanager
+def import_rollout_source_paths(source_path: Path) -> Generator[tuple[Path, ...]]:
+    expanded_source_path = source_path.expanduser().resolve()
+    if not expanded_source_path.exists():
+        raise CliError(f"Input file not found: {source_path}")
+    if expanded_source_path.is_dir():
+        paths = tuple(
+            sorted(path for path in expanded_source_path.rglob("*.jsonl") if path.is_file())
+        )
+        if not paths:
+            raise CliError(f"No rollout JSONL files found in import directory: {source_path}")
+        yield paths
+        return
+    if not expanded_source_path.is_file():
+        raise CliError(f"Input path is not a file or directory: {source_path}")
+    if expanded_source_path.suffix.lower() != ".zip":
+        yield (expanded_source_path,)
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        paths = tuple(extract_zip_rollout_sources(expanded_source_path, Path(tmpdir)))
+        if not paths:
+            raise CliError(f"No rollout JSONL files found in import zip: {source_path}")
+        yield paths
+
+
+def split_import_outcomes(
+    outcomes: Sequence[ImportSourceOutcome],
+) -> tuple[
+    list[ImportSessionPlan],
+    list[ImportSkippedSession],
+    list[ImportDuplicateSession],
+    list[ImportConflict],
+]:
+    outcomes_by_id: dict[str, list[ImportSourceOutcome]] = {}
+    for outcome in outcomes:
+        outcomes_by_id.setdefault(normalize_session_id(outcome.session_id), []).append(outcome)
+
+    import_plans: list[ImportSessionPlan] = []
+    skipped: list[ImportSkippedSession] = []
+    duplicates: list[ImportDuplicateSession] = []
+    conflicts: list[ImportConflict] = []
+
+    for grouped_outcomes in outcomes_by_id.values():
+        if len(grouped_outcomes) > 1:
+            duplicates.append(
+                ImportDuplicateSession(
+                    session_id=grouped_outcomes[0].session_id,
+                    source_paths=tuple(outcome.source_path for outcome in grouped_outcomes),
+                )
+            )
+            continue
+
+        value = grouped_outcomes[0].value
+        if isinstance(value, ImportSessionPlan):
+            import_plans.append(value)
+        elif isinstance(value, ImportSkippedSession):
+            skipped.append(value)
+        else:
+            conflicts.append(value)
+
+    return import_plans, skipped, duplicates, conflicts
+
+
+def plan_import_source_paths(
+    source_paths: Sequence[Path],
+    codex_home: Path,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    *,
+    name: str | None = None,
+) -> ImportSessionsPlan:
+    if name is not None and len(source_paths) != 1:
+        raise CliError("--name can only be used when importing one rollout file.")
+
+    outcomes: list[ImportSourceOutcome] = []
+    failures: list[ImportFailure] = []
+    for source_path in source_paths:
+        try:
+            plan = plan_bare_rollout_import(
+                source_path=source_path,
+                codex_home=codex_home,
+                session_index_path=session_index_path,
+                sessions_dir=sessions_dir,
+                name=name,
+            )
+            outcomes.append(
+                ImportSourceOutcome(
+                    session_id=plan.session_id,
+                    source_path=plan.source_path,
+                    value=plan,
+                )
+            )
+        except ImportSkippedIdentical as exc:
+            skipped_session = ImportSkippedSession(
+                source_path=exc.source_path,
+                existing_path=exc.existing_path,
+                session_id=exc.session_id,
+                fingerprint=exc.fingerprint,
+            )
+            outcomes.append(
+                ImportSourceOutcome(
+                    session_id=skipped_session.session_id,
+                    source_path=skipped_session.source_path,
+                    value=skipped_session,
+                )
+            )
+        except ImportRolloutConflict as exc:
+            conflict = ImportConflict(
+                source_path=exc.source_path,
+                existing_path=exc.existing_path,
+                session_id=exc.session_id,
+                source_fingerprint=exc.source_fingerprint,
+                existing_fingerprint=exc.existing_fingerprint,
+            )
+            outcomes.append(
+                ImportSourceOutcome(
+                    session_id=conflict.session_id,
+                    source_path=conflict.source_path,
+                    value=conflict,
+                )
+            )
+        except (CliError, ValueError, OSError) as exc:
+            failures.append(ImportFailure(source_path=source_path, message=str(exc)))
+
+    import_plans, skipped, duplicates, conflicts = split_import_outcomes(outcomes)
+    return ImportSessionsPlan(
+        import_plans=tuple(import_plans),
+        skipped=tuple(skipped),
+        duplicates=tuple(duplicates),
+        conflicts=tuple(conflicts),
+        failures=tuple(failures),
+    )
+
+
+def plan_sessions_import(
+    source_path: Path,
+    codex_home: Path,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    *,
+    name: str | None = None,
+) -> ImportSessionsPlan:
+    with import_rollout_source_paths(source_path) as source_paths:
+        return plan_import_source_paths(
+            source_paths=source_paths,
+            codex_home=codex_home,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+            name=name,
+        )
+
+
+def session_index_records_for_import_plans(plans: Sequence[ImportSessionPlan]) -> list[Any]:
+    if not plans:
+        return []
+    index_path = plans[0].session_index_path
+    records = session_index_records(index_path) if index_path.exists() else []
+    for plan in plans:
+        records = apply_import_plan_to_session_index_records(records, plan)
+    return records
+
+
+def import_session_plans(
+    plans: Sequence[ImportSessionPlan], codex_home: Path
+) -> tuple[Path | None, tuple[StateCacheBackup, ...]]:
+    if not plans:
+        return None, ()
+
+    index_path = plans[0].session_index_path
+    index_changed = any(plan.index_action in {"add", "update"} for plan in plans)
+    updated_index_records = session_index_records_for_import_plans(plans) if index_changed else None
+
+    label = backup_label()
+    backup_dir = backup_dir_for(codex_home, label)
+    index_backup_path = backup_session_index(index_path, backup_dir) if index_changed else None
+    attempted_paths: list[Path] = []
+    try:
+        if index_changed:
+            if updated_index_records is None:
+                raise CliError("Could not prepare session_index.jsonl update.")
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            write_session_index_records(index_path, updated_index_records)
+        for plan in plans:
+            attempted_paths.append(plan.target_path)
+            copy_or_rewrite_import_rollout(plan)
+        state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
+    except (CliError, CodexStateError, OSError) as exc:
+        try:
+            for path in attempted_paths:
+                restore_file_backup(path, None)
+            if index_changed:
+                restore_session_index_backup(index_path, index_backup_path)
+            remove_backup_dir_if_empty(backup_dir)
+        except OSError as restore_exc:
+            raise CliError(
+                f"{exc} Also failed to restore Codex session files from backup: {restore_exc}"
+            ) from restore_exc
+        raise CliError(
+            f"{exc} Rolled back imported Codex session files. Close all Codex sessions and retry."
+        ) from exc
+
+    return index_backup_path, state_cache_backups
+
+
+def import_sessions(
+    source_path: Path,
+    codex_home: Path,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    *,
+    name: str | None = None,
+) -> ImportSessionsResult:
+    with import_rollout_source_paths(source_path) as source_paths:
+        plan = plan_import_source_paths(
+            source_paths=source_paths,
+            codex_home=codex_home,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+            name=name,
+        )
+        if not plan.import_plans:
+            return ImportSessionsResult(
+                plan=plan,
+                session_index_backup_path=None,
+                state_cache_backups=(),
+            )
+        session_index_backup_path, state_cache_backups = import_session_plans(
+            plan.import_plans, codex_home
+        )
+        return ImportSessionsResult(
+            plan=plan,
+            session_index_backup_path=session_index_backup_path,
+            state_cache_backups=state_cache_backups,
+        )
 
 
 def export_filename_date(source_path: Path, document: SearchDocument) -> str:

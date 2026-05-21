@@ -249,9 +249,13 @@ def parse_import_args(
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog=f"{prog} import",
-        description="Import a bare Codex rollout JSONL file into Codex home.",
+        description="Import Codex rollout JSONL files into Codex home.",
     )
-    parser.add_argument("input", type=Path, help="Path to a rollout JSONL file.")
+    parser.add_argument(
+        "input",
+        type=Path,
+        help="Path to a rollout JSONL file, directory of JSONL files, or export zip.",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",

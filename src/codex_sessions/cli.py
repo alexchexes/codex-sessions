@@ -43,16 +43,22 @@ from codex_sessions.sessions.paths import (
 from codex_sessions.sessions.rollout import (
     ExportSessionPlan,
     ExportSessionsPlan,
+    ImportConflict,
+    ImportDuplicateSession,
+    ImportFailure,
     ImportSessionPlan,
+    ImportSessionsPlan,
+    ImportSessionsResult,
+    ImportSkippedSession,
     format_fingerprint,
 )
 from codex_sessions.sessions.transfer import (
     EXPORT_OUTPUT_DIRECTORY,
     EXPORT_OUTPUT_ZIP,
     export_sessions,
-    import_bare_rollout,
-    plan_bare_rollout_import,
+    import_sessions,
     plan_sessions_export,
+    plan_sessions_import,
 )
 
 __version__ = "0.1.0"
@@ -315,44 +321,87 @@ def format_import_plan_lines(plan: ImportSessionPlan) -> list[str]:
     return lines
 
 
-def run_import_command(args: argparse.Namespace) -> int:
-    codex_home = args.codex_home.expanduser().resolve()
-    session_index_path = (
-        args.session_index.expanduser().resolve()
-        if args.session_index
-        else codex_home / "session_index.jsonl"
-    )
-    sessions_dir = (
-        args.sessions_dir.expanduser().resolve() if args.sessions_dir else codex_home / "sessions"
+def format_import_skipped_line(skipped: ImportSkippedSession) -> str:
+    return (
+        f"SKIPPED identical {skipped.session_id} - "
+        f"Existing: {skipped.existing_path} ({format_fingerprint(skipped.fingerprint)}); "
+        f"Import: {skipped.source_path}"
     )
 
-    if args.dry_run:
-        try:
-            plan = plan_bare_rollout_import(
-                source_path=args.input,
-                codex_home=codex_home,
-                session_index_path=session_index_path,
-                sessions_dir=sessions_dir,
-                name=args.name,
+
+def format_import_conflict_line(conflict: ImportConflict) -> str:
+    existing_fingerprint = (
+        format_fingerprint(conflict.existing_fingerprint)
+        if conflict.existing_fingerprint
+        else "UNKNOWN"
+    )
+    return (
+        f"CONFLICT {conflict.session_id} - "
+        f"Existing: {conflict.existing_path} ({existing_fingerprint}); "
+        f"Import: {conflict.source_path} ({format_fingerprint(conflict.source_fingerprint)})"
+    )
+
+
+def format_import_duplicate_lines(duplicate: ImportDuplicateSession) -> list[str]:
+    lines = [
+        f"DUPLICATE {duplicate.session_id} - "
+        f"{len(duplicate.source_paths)} input files with the same session id:"
+    ]
+    lines.extend(f"  {source_path}" for source_path in duplicate.source_paths)
+    return lines
+
+
+def format_import_failure_line(failure: ImportFailure) -> str:
+    return f"FAILED {failure.source_path} - {failure.message}"
+
+
+def import_plan_has_errors(plan: ImportSessionsPlan) -> bool:
+    return bool(plan.duplicates or plan.conflicts or plan.failures)
+
+
+def format_import_sessions_plan_lines(plan: ImportSessionsPlan) -> list[str]:
+    if (
+        len(plan.import_plans) == 1
+        and not plan.skipped
+        and not plan.duplicates
+        and not plan.conflicts
+        and not plan.failures
+    ):
+        return format_import_plan_lines(plan.import_plans[0])
+
+    lines = [
+        f"Would import: {len(plan.import_plans)}",
+        f"Skipped identical: {len(plan.skipped)}",
+        f"Duplicates: {len(plan.duplicates)}",
+        f"Conflicts: {len(plan.conflicts)}",
+        f"Failed: {len(plan.failures)}",
+    ]
+    if plan.import_plans:
+        lines.append("Would import sessions:")
+        for import_plan in plan.import_plans:
+            lines.append(
+                f"- {import_plan.session_id} - {import_plan.thread_name} -> "
+                f"{import_plan.target_path}"
             )
-        except (CliError, ValueError) as exc:
-            raise SystemExit(str(exc)) from exc
-        for line in format_import_plan_lines(plan):
-            print(encode_for_output(line, sys.stdout.encoding))
-        return 0
+        lines.append("State cache reset required after import.")
+    if plan.skipped:
+        lines.append("Skipped identical sessions:")
+        lines.extend(format_import_skipped_line(skipped) for skipped in plan.skipped)
+    if plan.duplicates:
+        lines.append("Duplicate input sessions:")
+        for duplicate in plan.duplicates:
+            lines.extend(format_import_duplicate_lines(duplicate))
+    if plan.conflicts:
+        lines.append("Conflicts:")
+        lines.extend(format_import_conflict_line(conflict) for conflict in plan.conflicts)
+    if plan.failures:
+        lines.append("Failed:")
+        lines.extend(format_import_failure_line(failure) for failure in plan.failures)
+    return lines
 
-    try:
-        result = import_bare_rollout(
-            source_path=args.input,
-            codex_home=codex_home,
-            session_index_path=session_index_path,
-            sessions_dir=sessions_dir,
-            name=args.name,
-        )
-    except (CliError, ValueError) as exc:
-        raise SystemExit(str(exc)) from exc
 
-    plan = result.plan
+def print_single_import_result(result: ImportSessionsResult) -> None:
+    plan = result.plan.import_plans[0]
     print(
         encode_for_output(
             f"Imported session: {plan.session_id} - {plan.thread_name}",
@@ -380,7 +429,101 @@ def run_import_command(args: argparse.Namespace) -> int:
             print(f"{backup.original_path} -> {backup.backup_path}")
     else:
         print("No Codex state cache files found to reset.")
-    return 0
+
+
+def print_import_sessions_result(result: ImportSessionsResult) -> None:
+    plan = result.plan
+    if (
+        len(plan.import_plans) == 1
+        and not plan.skipped
+        and not plan.duplicates
+        and not plan.conflicts
+        and not plan.failures
+    ):
+        print_single_import_result(result)
+        return
+
+    print(f"Imported: {len(plan.import_plans)}")
+    print(f"Skipped identical: {len(plan.skipped)}")
+    print(f"Duplicates: {len(plan.duplicates)}")
+    print(f"Conflicts: {len(plan.conflicts)}")
+    print(f"Failed: {len(plan.failures)}")
+    if plan.import_plans:
+        print("Imported sessions:")
+        for import_plan in plan.import_plans:
+            print(
+                encode_for_output(
+                    f"- {import_plan.session_id} - {import_plan.thread_name} -> "
+                    f"{import_plan.target_path}",
+                    sys.stdout.encoding,
+                )
+            )
+    if plan.skipped:
+        print("Skipped identical sessions:")
+        for skipped in plan.skipped:
+            print(encode_for_output(format_import_skipped_line(skipped), sys.stdout.encoding))
+    if plan.duplicates:
+        print("Duplicate input sessions:")
+        for duplicate in plan.duplicates:
+            for line in format_import_duplicate_lines(duplicate):
+                print(encode_for_output(line, sys.stdout.encoding))
+    if plan.conflicts:
+        print("Conflicts:")
+        for conflict in plan.conflicts:
+            print(encode_for_output(format_import_conflict_line(conflict), sys.stdout.encoding))
+    if plan.failures:
+        print("Failed:")
+        for failure in plan.failures:
+            print(encode_for_output(format_import_failure_line(failure), sys.stdout.encoding))
+    if result.session_index_backup_path is not None:
+        print(f"Session index backup: {result.session_index_backup_path}")
+    if result.state_cache_backups:
+        print("State cache backups:")
+        for backup in result.state_cache_backups:
+            print(f"{backup.original_path} -> {backup.backup_path}")
+    elif plan.import_plans:
+        print("No Codex state cache files found to reset.")
+
+
+def run_import_command(args: argparse.Namespace) -> int:
+    codex_home = args.codex_home.expanduser().resolve()
+    session_index_path = (
+        args.session_index.expanduser().resolve()
+        if args.session_index
+        else codex_home / "session_index.jsonl"
+    )
+    sessions_dir = (
+        args.sessions_dir.expanduser().resolve() if args.sessions_dir else codex_home / "sessions"
+    )
+
+    if args.dry_run:
+        try:
+            plan = plan_sessions_import(
+                source_path=args.input,
+                codex_home=codex_home,
+                session_index_path=session_index_path,
+                sessions_dir=sessions_dir,
+                name=args.name,
+            )
+        except (CliError, ValueError) as exc:
+            raise SystemExit(str(exc)) from exc
+        for line in format_import_sessions_plan_lines(plan):
+            print(encode_for_output(line, sys.stdout.encoding))
+        return 1 if import_plan_has_errors(plan) else 0
+
+    try:
+        result = import_sessions(
+            source_path=args.input,
+            codex_home=codex_home,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+            name=args.name,
+        )
+    except (CliError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+
+    print_import_sessions_result(result)
+    return 1 if import_plan_has_errors(result.plan) else 0
 
 
 def export_rollout_action_label(plan: ExportSessionPlan) -> str:

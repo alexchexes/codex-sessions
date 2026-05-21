@@ -44,6 +44,51 @@ class ImportSessionResult:
 
 
 @dataclass(frozen=True)
+class ImportSkippedSession:
+    source_path: Path
+    existing_path: Path
+    session_id: str
+    fingerprint: FileFingerprint
+
+
+@dataclass(frozen=True)
+class ImportConflict:
+    source_path: Path
+    existing_path: Path
+    session_id: str
+    source_fingerprint: FileFingerprint
+    existing_fingerprint: FileFingerprint | None
+
+
+@dataclass(frozen=True)
+class ImportFailure:
+    source_path: Path
+    message: str
+
+
+@dataclass(frozen=True)
+class ImportDuplicateSession:
+    session_id: str
+    source_paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class ImportSessionsPlan:
+    import_plans: tuple[ImportSessionPlan, ...]
+    skipped: tuple[ImportSkippedSession, ...]
+    duplicates: tuple[ImportDuplicateSession, ...]
+    conflicts: tuple[ImportConflict, ...]
+    failures: tuple[ImportFailure, ...]
+
+
+@dataclass(frozen=True)
+class ImportSessionsResult:
+    plan: ImportSessionsPlan
+    session_index_backup_path: Path | None
+    state_cache_backups: tuple[StateCacheBackup, ...]
+
+
+@dataclass(frozen=True)
 class ExportSessionPlan:
     source_path: Path
     output_path: Path
