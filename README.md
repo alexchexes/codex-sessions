@@ -234,6 +234,13 @@ Preview the target path and index action without writing anything:
 codex-sessions import --dry-run ./rollout.jsonl
 ```
 
+Allow an existing local session to fast-forward when the imported rollout is
+safely ahead:
+
+```bash
+codex-sessions import --merge ./exports.zip
+```
+
 `import` copies new rollouts into `sessions/YYYY/MM/DD/`, adds or updates the
 matching `session_index.jsonl` entries when needed, updates rollout title
 events to match the chosen titles, and resets Codex state cache once after
@@ -242,7 +249,10 @@ imported title explicitly when importing one rollout file. Already-present
 identical sessions are skipped. Duplicate session IDs inside one import input
 are reported and refused as ambiguous. Existing sessions with different rollout
 content are reported as conflicts and are not overwritten; other safe sessions
-from the same bulk import are still imported.
+from the same bulk import are still imported. With `--merge`, imports also
+fast-forward local rollouts when their comparable history is a prefix of the
+incoming rollout. Equivalent histories and locally ahead histories are skipped;
+diverged histories are reported and left untouched.
 
 Search all Codex sessions:
 

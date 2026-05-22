@@ -13,6 +13,7 @@ from codex_sessions.codex.state import (
     CodexStateError,
     StateCacheBackup,
     backup_dir_for,
+    backup_file,
     backup_label,
     backup_session_index,
     remove_backup_dir_if_empty,
@@ -48,12 +49,14 @@ from codex_sessions.sessions.rollout import (
     ExportSessionsResult,
     FileFingerprint,
     ImportConflict,
+    ImportDivergedConflict,
     ImportDuplicateSession,
     ImportFailure,
     ImportSessionPlan,
     ImportSessionResult,
     ImportSessionsPlan,
     ImportSessionsResult,
+    ImportSkippedHistory,
     ImportSkippedSession,
     export_title_slug,
     file_fingerprint,
@@ -64,6 +67,11 @@ from codex_sessions.sessions.rollout import (
     resolve_export_output_path,
     rollout_filename_date,
     write_rollout_records,
+)
+from codex_sessions.sessions.rollout_history import (
+    RolloutHistoryComparison,
+    RolloutHistoryRelation,
+    compare_rollout_histories,
 )
 
 EXPORT_OUTPUT_FILE = "file"
@@ -83,7 +91,13 @@ class ExportSessionCandidate:
 class ImportSourceOutcome:
     session_id: str
     source_path: Path
-    value: ImportSessionPlan | ImportSkippedSession | ImportConflict
+    value: (
+        ImportSessionPlan
+        | ImportSkippedSession
+        | ImportSkippedHistory
+        | ImportConflict
+        | ImportDivergedConflict
+    )
 
 
 class ImportSkippedIdentical(CliError):
@@ -291,6 +305,61 @@ def plan_bare_rollout_import(
     )
 
 
+def plan_fast_forward_rollout_import(
+    source_path: Path,
+    existing_path: Path,
+    source_fingerprint: FileFingerprint,
+    codex_home: Path,
+    session_index_path: Path | None = None,
+    *,
+    name: str | None = None,
+) -> ImportSessionPlan:
+    document = build_search_document(source_path, "...")
+    if document.session_id is None:
+        raise CliError(f"Cannot infer session id from rollout: {source_path}")
+
+    index_path = session_index_path or codex_home / "session_index.jsonl"
+    index_records = session_index_records(index_path) if index_path.exists() else []
+    existing_index_match = existing_index_record_for_id(index_records, document.session_id)
+    existing_index_thread_name = (
+        session_index_record_thread_name(existing_index_match[1])
+        if existing_index_match is not None
+        else None
+    )
+
+    if name is not None:
+        normalized_name = name.strip()
+    elif document.thread_name:
+        normalized_name = document.thread_name
+    elif existing_index_thread_name:
+        normalized_name = existing_index_thread_name
+    else:
+        existing_document = build_search_document(existing_path, "...")
+        normalized_name = existing_document.thread_name or inferred_thread_name(document)
+    if not normalized_name:
+        raise CliError("Imported session title must not be empty.")
+
+    index_action = "add" if existing_index_match is None else "advance"
+    _, rollout_will_be_rewritten = prepare_import_rollout_records(
+        source_path, document.session_id, normalized_name
+    )
+
+    return ImportSessionPlan(
+        source_path=source_path,
+        target_path=existing_path,
+        session_index_path=index_path,
+        session_id=document.session_id,
+        thread_name=normalized_name,
+        started_at=document.started_at,
+        ended_at=document.ended_at,
+        index_action=index_action,
+        existing_index_thread_name=existing_index_thread_name,
+        source_fingerprint=source_fingerprint,
+        rollout_will_be_rewritten=rollout_will_be_rewritten,
+        replaces_existing_rollout=True,
+    )
+
+
 def session_index_record_for_import_plan(plan: ImportSessionPlan) -> dict[str, str]:
     return {
         "id": plan.session_id,
@@ -314,13 +383,17 @@ def apply_import_plan_to_session_index_records(
         if existing_index_match is not None:
             return list(records)
         return [*records, session_index_record_for_import_plan(plan)]
-    if plan.index_action == "update":
+    if plan.index_action in {"update", "advance"}:
         if existing_index_match is None:
             raise CliError(f"No session_index.jsonl entry found for ID: {plan.session_id}")
         record_index, record = existing_index_match
         updated_records = list(records)
         updated_record = dict(record)
         updated_record["thread_name"] = plan.thread_name
+        if plan.index_action == "advance":
+            updated_record["updated_at"] = format_session_index_timestamp(
+                plan.ended_at or plan.started_at
+            )
         updated_records[record_index] = updated_record
         return updated_records
     return list(records)
@@ -442,22 +515,96 @@ def import_rollout_source_paths(source_path: Path) -> Generator[tuple[Path, ...]
         yield paths
 
 
+def import_history_skip(
+    conflict: ImportRolloutConflict, comparison: RolloutHistoryComparison
+) -> ImportSkippedHistory:
+    if comparison.common_comparable_records is None:
+        raise CliError(f"Could not compare imported rollout history: {conflict.source_path}")
+    return ImportSkippedHistory(
+        source_path=conflict.source_path,
+        existing_path=conflict.existing_path,
+        session_id=conflict.session_id,
+        common_comparable_records=comparison.common_comparable_records,
+        existing_tail_comparable_records=comparison.local_tail_comparable_records,
+        incoming_tail_comparable_records=comparison.incoming_tail_comparable_records,
+    )
+
+
+def import_diverged_conflict(
+    conflict: ImportRolloutConflict,
+    existing_fingerprint: FileFingerprint,
+    comparison: RolloutHistoryComparison,
+) -> ImportDivergedConflict:
+    if comparison.common_comparable_records is None:
+        raise CliError(f"Could not compare imported rollout history: {conflict.source_path}")
+    return ImportDivergedConflict(
+        source_path=conflict.source_path,
+        existing_path=conflict.existing_path,
+        session_id=conflict.session_id,
+        source_fingerprint=conflict.source_fingerprint,
+        existing_fingerprint=existing_fingerprint,
+        common_comparable_records=comparison.common_comparable_records,
+        existing_tail_comparable_records=comparison.local_tail_comparable_records,
+        incoming_tail_comparable_records=comparison.incoming_tail_comparable_records,
+    )
+
+
+def merge_conflicting_rollout_import(
+    conflict: ImportRolloutConflict,
+    codex_home: Path,
+    session_index_path: Path | None,
+    *,
+    name: str | None,
+) -> ImportSessionPlan | ImportSkippedHistory | ImportDivergedConflict:
+    existing_fingerprint = conflict.existing_fingerprint or file_fingerprint(conflict.existing_path)
+    comparison = compare_rollout_histories(
+        conflict.existing_path,
+        conflict.source_path,
+        local_session_id=conflict.session_id,
+        incoming_session_id=conflict.session_id,
+        local_fingerprint=existing_fingerprint,
+        incoming_fingerprint=conflict.source_fingerprint,
+    )
+    if comparison.relation == RolloutHistoryRelation.EQUIVALENT:
+        return import_history_skip(conflict, comparison)
+    if comparison.relation == RolloutHistoryRelation.LOCAL_AHEAD:
+        return import_history_skip(conflict, comparison)
+    if comparison.relation == RolloutHistoryRelation.INCOMING_AHEAD:
+        return plan_fast_forward_rollout_import(
+            source_path=conflict.source_path,
+            existing_path=conflict.existing_path,
+            source_fingerprint=conflict.source_fingerprint,
+            codex_home=codex_home,
+            session_index_path=session_index_path,
+            name=name,
+        )
+    return import_diverged_conflict(conflict, existing_fingerprint, comparison)
+
+
 def split_import_outcomes(
     outcomes: Sequence[ImportSourceOutcome],
 ) -> tuple[
     list[ImportSessionPlan],
+    list[ImportSessionPlan],
     list[ImportSkippedSession],
+    list[ImportSkippedHistory],
+    list[ImportSkippedHistory],
     list[ImportDuplicateSession],
     list[ImportConflict],
+    list[ImportDivergedConflict],
 ]:
     outcomes_by_id: dict[str, list[ImportSourceOutcome]] = {}
     for outcome in outcomes:
         outcomes_by_id.setdefault(normalize_session_id(outcome.session_id), []).append(outcome)
 
     import_plans: list[ImportSessionPlan] = []
+    fast_forward_plans: list[ImportSessionPlan] = []
     skipped: list[ImportSkippedSession] = []
+    skipped_equivalent: list[ImportSkippedHistory] = []
+    skipped_local_ahead: list[ImportSkippedHistory] = []
     duplicates: list[ImportDuplicateSession] = []
     conflicts: list[ImportConflict] = []
+    diverged: list[ImportDivergedConflict] = []
 
     for grouped_outcomes in outcomes_by_id.values():
         if len(grouped_outcomes) > 1:
@@ -471,13 +618,34 @@ def split_import_outcomes(
 
         value = grouped_outcomes[0].value
         if isinstance(value, ImportSessionPlan):
-            import_plans.append(value)
+            if value.replaces_existing_rollout:
+                fast_forward_plans.append(value)
+            else:
+                import_plans.append(value)
         elif isinstance(value, ImportSkippedSession):
             skipped.append(value)
+        elif isinstance(value, ImportSkippedHistory):
+            if value.incoming_tail_comparable_records:
+                raise CliError(f"Unexpected incoming tail for skipped import: {value.source_path}")
+            if value.existing_tail_comparable_records:
+                skipped_local_ahead.append(value)
+            else:
+                skipped_equivalent.append(value)
+        elif isinstance(value, ImportDivergedConflict):
+            diverged.append(value)
         else:
             conflicts.append(value)
 
-    return import_plans, skipped, duplicates, conflicts
+    return (
+        import_plans,
+        fast_forward_plans,
+        skipped,
+        skipped_equivalent,
+        skipped_local_ahead,
+        duplicates,
+        conflicts,
+        diverged,
+    )
 
 
 def plan_import_source_paths(
@@ -487,6 +655,7 @@ def plan_import_source_paths(
     sessions_dir: Path | None = None,
     *,
     name: str | None = None,
+    merge: bool = False,
 ) -> ImportSessionsPlan:
     if name is not None and len(source_paths) != 1:
         raise CliError("--name can only be used when importing one rollout file.")
@@ -524,29 +693,53 @@ def plan_import_source_paths(
                 )
             )
         except ImportRolloutConflict as exc:
-            conflict = ImportConflict(
-                source_path=exc.source_path,
-                existing_path=exc.existing_path,
-                session_id=exc.session_id,
-                source_fingerprint=exc.source_fingerprint,
-                existing_fingerprint=exc.existing_fingerprint,
+            outcome: (
+                ImportSessionPlan | ImportSkippedHistory | ImportConflict | ImportDivergedConflict
             )
+            if merge:
+                outcome = merge_conflicting_rollout_import(
+                    exc,
+                    codex_home=codex_home,
+                    session_index_path=session_index_path,
+                    name=name,
+                )
+            else:
+                outcome = ImportConflict(
+                    source_path=exc.source_path,
+                    existing_path=exc.existing_path,
+                    session_id=exc.session_id,
+                    source_fingerprint=exc.source_fingerprint,
+                    existing_fingerprint=exc.existing_fingerprint,
+                )
             outcomes.append(
                 ImportSourceOutcome(
-                    session_id=conflict.session_id,
-                    source_path=conflict.source_path,
-                    value=conflict,
+                    session_id=outcome.session_id,
+                    source_path=outcome.source_path,
+                    value=outcome,
                 )
             )
         except (CliError, ValueError, OSError) as exc:
             failures.append(ImportFailure(source_path=source_path, message=str(exc)))
 
-    import_plans, skipped, duplicates, conflicts = split_import_outcomes(outcomes)
+    (
+        import_plans,
+        fast_forward_plans,
+        skipped,
+        skipped_equivalent,
+        skipped_local_ahead,
+        duplicates,
+        conflicts,
+        diverged,
+    ) = split_import_outcomes(outcomes)
     return ImportSessionsPlan(
         import_plans=tuple(import_plans),
+        fast_forward_plans=tuple(fast_forward_plans),
         skipped=tuple(skipped),
+        skipped_equivalent=tuple(skipped_equivalent),
+        skipped_local_ahead=tuple(skipped_local_ahead),
         duplicates=tuple(duplicates),
         conflicts=tuple(conflicts),
+        diverged=tuple(diverged),
         failures=tuple(failures),
     )
 
@@ -558,6 +751,7 @@ def plan_sessions_import(
     sessions_dir: Path | None = None,
     *,
     name: str | None = None,
+    merge: bool = False,
 ) -> ImportSessionsPlan:
     with import_rollout_source_paths(source_path) as source_paths:
         return plan_import_source_paths(
@@ -566,6 +760,7 @@ def plan_sessions_import(
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
             name=name,
+            merge=merge,
         )
 
 
@@ -581,17 +776,22 @@ def session_index_records_for_import_plans(plans: Sequence[ImportSessionPlan]) -
 
 def import_session_plans(
     plans: Sequence[ImportSessionPlan], codex_home: Path
-) -> tuple[Path | None, tuple[StateCacheBackup, ...]]:
+) -> tuple[Path | None, tuple[Path, ...], tuple[StateCacheBackup, ...]]:
     if not plans:
-        return None, ()
+        return None, (), ()
 
     index_path = plans[0].session_index_path
-    index_changed = any(plan.index_action in {"add", "update"} for plan in plans)
+    index_changed = any(plan.index_action in {"add", "update", "advance"} for plan in plans)
     updated_index_records = session_index_records_for_import_plans(plans) if index_changed else None
 
     label = backup_label()
     backup_dir = backup_dir_for(codex_home, label)
     index_backup_path = backup_session_index(index_path, backup_dir) if index_changed else None
+    rollout_backups = {
+        plan.target_path: backup_file(plan.target_path, backup_dir)
+        for plan in plans
+        if plan.replaces_existing_rollout
+    }
     attempted_paths: list[Path] = []
     try:
         if index_changed:
@@ -606,7 +806,7 @@ def import_session_plans(
     except (CliError, CodexStateError, OSError) as exc:
         try:
             for path in attempted_paths:
-                restore_file_backup(path, None)
+                restore_file_backup(path, rollout_backups.get(path))
             if index_changed:
                 restore_session_index_backup(index_path, index_backup_path)
             remove_backup_dir_if_empty(backup_dir)
@@ -618,7 +818,11 @@ def import_session_plans(
             f"{exc} Rolled back imported Codex session files. Close all Codex sessions and retry."
         ) from exc
 
-    return index_backup_path, state_cache_backups
+    return (
+        index_backup_path,
+        tuple(backup for backup in rollout_backups.values() if backup is not None),
+        state_cache_backups,
+    )
 
 
 def import_sessions(
@@ -628,6 +832,7 @@ def import_sessions(
     sessions_dir: Path | None = None,
     *,
     name: str | None = None,
+    merge: bool = False,
 ) -> ImportSessionsResult:
     with import_rollout_source_paths(source_path) as source_paths:
         plan = plan_import_source_paths(
@@ -636,19 +841,23 @@ def import_sessions(
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
             name=name,
+            merge=merge,
         )
-        if not plan.import_plans:
+        selected_plans = (*plan.import_plans, *plan.fast_forward_plans)
+        if not selected_plans:
             return ImportSessionsResult(
                 plan=plan,
                 session_index_backup_path=None,
+                rollout_backup_paths=(),
                 state_cache_backups=(),
             )
-        session_index_backup_path, state_cache_backups = import_session_plans(
-            plan.import_plans, codex_home
+        session_index_backup_path, rollout_backup_paths, state_cache_backups = import_session_plans(
+            selected_plans, codex_home
         )
         return ImportSessionsResult(
             plan=plan,
             session_index_backup_path=session_index_backup_path,
+            rollout_backup_paths=rollout_backup_paths,
             state_cache_backups=state_cache_backups,
         )
 

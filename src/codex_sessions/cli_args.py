@@ -262,6 +262,11 @@ def parse_import_args(
         help="Show the import plan without modifying Codex state.",
     )
     parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="Fast-forward existing sessions when imported rollout history is safely ahead.",
+    )
+    parser.add_argument(
         "--name",
         "--rename",
         dest="name",

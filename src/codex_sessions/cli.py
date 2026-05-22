@@ -44,11 +44,13 @@ from codex_sessions.sessions.rollout import (
     ExportSessionPlan,
     ExportSessionsPlan,
     ImportConflict,
+    ImportDivergedConflict,
     ImportDuplicateSession,
     ImportFailure,
     ImportSessionPlan,
     ImportSessionsPlan,
     ImportSessionsResult,
+    ImportSkippedHistory,
     ImportSkippedSession,
     format_fingerprint,
 )
@@ -286,15 +288,18 @@ def import_index_action_label(action: str) -> str:
         return "add session_index.jsonl entry"
     if action == "update":
         return "update session_index.jsonl title"
+    if action == "advance":
+        return "update session_index.jsonl title and timestamp"
     if action == "keep":
         return "keep existing session_index.jsonl entry"
     return action
 
 
 def import_rollout_action_label(plan: ImportSessionPlan) -> str:
+    action = "replace" if plan.replaces_existing_rollout else "copy"
     if plan.rollout_will_be_rewritten:
-        return "copy with rollout title event update"
-    return "copy unchanged"
+        return f"{action} with rollout title event update"
+    return f"{action} unchanged"
 
 
 def format_import_plan_lines(plan: ImportSessionPlan) -> list[str]:
@@ -323,9 +328,18 @@ def format_import_plan_lines(plan: ImportSessionPlan) -> list[str]:
 
 def format_import_skipped_line(skipped: ImportSkippedSession) -> str:
     return (
-        f"SKIPPED identical {skipped.session_id} - "
+        f"SKIPPED (identical) {skipped.session_id} - "
         f"Existing: {skipped.existing_path} ({format_fingerprint(skipped.fingerprint)}); "
         f"Import: {skipped.source_path}"
+    )
+
+
+def format_import_history_skip_line(skipped: ImportSkippedHistory, reason: str) -> str:
+    return (
+        f"SKIPPED ({reason}) {skipped.session_id} - Existing: {skipped.existing_path}; "
+        f"Import: {skipped.source_path}; common records: {skipped.common_comparable_records}; "
+        f"existing tail: {skipped.existing_tail_comparable_records}; "
+        f"import tail: {skipped.incoming_tail_comparable_records}"
     )
 
 
@@ -342,6 +356,20 @@ def format_import_conflict_line(conflict: ImportConflict) -> str:
     )
 
 
+def format_import_diverged_lines(conflict: ImportDivergedConflict) -> list[str]:
+    return [
+        f"DIVERGED {conflict.session_id}",
+        f"  Existing: {conflict.existing_path} "
+        f"({format_fingerprint(conflict.existing_fingerprint)})",
+        f"  Import: {conflict.source_path} ({format_fingerprint(conflict.source_fingerprint)})",
+        f"  Common comparable records: {conflict.common_comparable_records}",
+        f"  Existing comparable records after common prefix: "
+        f"{conflict.existing_tail_comparable_records}",
+        f"  Import comparable records after common prefix: "
+        f"{conflict.incoming_tail_comparable_records}",
+    ]
+
+
 def format_import_duplicate_lines(duplicate: ImportDuplicateSession) -> list[str]:
     lines = [
         f"DUPLICATE {duplicate.session_id} - "
@@ -355,25 +383,59 @@ def format_import_failure_line(failure: ImportFailure) -> str:
     return f"FAILED {failure.source_path} - {failure.message}"
 
 
+def import_title_update_plans(plan: ImportSessionsPlan) -> tuple[ImportSessionPlan, ...]:
+    return tuple(
+        import_plan
+        for import_plan in (*plan.import_plans, *plan.fast_forward_plans)
+        if import_plan.existing_index_thread_name is not None
+        and import_plan.existing_index_thread_name != import_plan.thread_name
+    )
+
+
+def append_import_title_update_lines(
+    lines: list[str], plan: ImportSessionsPlan, tense: str
+) -> None:
+    title_updates = import_title_update_plans(plan)
+    if not title_updates:
+        return
+    lines.append(f"Titles {tense}:")
+    for import_plan in title_updates:
+        lines.extend(
+            [
+                f"- {import_plan.session_id}",
+                f"  From: {import_plan.existing_index_thread_name}",
+                f"  To: {import_plan.thread_name}",
+            ]
+        )
+
+
 def import_plan_has_errors(plan: ImportSessionsPlan) -> bool:
-    return bool(plan.duplicates or plan.conflicts or plan.failures)
+    return bool(plan.duplicates or plan.conflicts or plan.diverged or plan.failures)
 
 
 def format_import_sessions_plan_lines(plan: ImportSessionsPlan) -> list[str]:
     if (
         len(plan.import_plans) == 1
+        and not plan.fast_forward_plans
         and not plan.skipped
+        and not plan.skipped_equivalent
+        and not plan.skipped_local_ahead
         and not plan.duplicates
         and not plan.conflicts
+        and not plan.diverged
         and not plan.failures
     ):
         return format_import_plan_lines(plan.import_plans[0])
 
     lines = [
         f"Would import: {len(plan.import_plans)}",
-        f"Skipped identical: {len(plan.skipped)}",
+        f"Would fast-forward: {len(plan.fast_forward_plans)}",
+        f"Skipped (identical): {len(plan.skipped)}",
+        f"Skipped (equivalent): {len(plan.skipped_equivalent)}",
+        f"Skipped (local ahead): {len(plan.skipped_local_ahead)}",
         f"Duplicates: {len(plan.duplicates)}",
         f"Conflicts: {len(plan.conflicts)}",
+        f"Diverged conflicts: {len(plan.diverged)}",
         f"Failed: {len(plan.failures)}",
     ]
     if plan.import_plans:
@@ -384,9 +446,29 @@ def format_import_sessions_plan_lines(plan: ImportSessionsPlan) -> list[str]:
                 f"{import_plan.target_path}"
             )
         lines.append("State cache reset required after import.")
+    if plan.fast_forward_plans:
+        lines.append("Would fast-forward sessions:")
+        for import_plan in plan.fast_forward_plans:
+            lines.append(
+                f"- {import_plan.session_id} - {import_plan.thread_name} -> "
+                f"{import_plan.target_path}"
+            )
+        lines.append("State cache reset required after fast-forward.")
     if plan.skipped:
-        lines.append("Skipped identical sessions:")
+        lines.append("Skipped (identical) sessions:")
         lines.extend(format_import_skipped_line(skipped) for skipped in plan.skipped)
+    if plan.skipped_equivalent:
+        lines.append("Skipped (equivalent) sessions:")
+        lines.extend(
+            format_import_history_skip_line(skipped, "equivalent")
+            for skipped in plan.skipped_equivalent
+        )
+    if plan.skipped_local_ahead:
+        lines.append("Skipped (local ahead) sessions:")
+        lines.extend(
+            format_import_history_skip_line(skipped, "local ahead")
+            for skipped in plan.skipped_local_ahead
+        )
     if plan.duplicates:
         lines.append("Duplicate input sessions:")
         for duplicate in plan.duplicates:
@@ -394,9 +476,14 @@ def format_import_sessions_plan_lines(plan: ImportSessionsPlan) -> list[str]:
     if plan.conflicts:
         lines.append("Conflicts:")
         lines.extend(format_import_conflict_line(conflict) for conflict in plan.conflicts)
+    if plan.diverged:
+        lines.append("Diverged conflicts:")
+        for conflict in plan.diverged:
+            lines.extend(format_import_diverged_lines(conflict))
     if plan.failures:
         lines.append("Failed:")
         lines.extend(format_import_failure_line(failure) for failure in plan.failures)
+    append_import_title_update_lines(lines, plan, "would update")
     return lines
 
 
@@ -435,18 +522,26 @@ def print_import_sessions_result(result: ImportSessionsResult) -> None:
     plan = result.plan
     if (
         len(plan.import_plans) == 1
+        and not plan.fast_forward_plans
         and not plan.skipped
+        and not plan.skipped_equivalent
+        and not plan.skipped_local_ahead
         and not plan.duplicates
         and not plan.conflicts
+        and not plan.diverged
         and not plan.failures
     ):
         print_single_import_result(result)
         return
 
     print(f"Imported: {len(plan.import_plans)}")
-    print(f"Skipped identical: {len(plan.skipped)}")
+    print(f"Fast-forwarded: {len(plan.fast_forward_plans)}")
+    print(f"Skipped (identical): {len(plan.skipped)}")
+    print(f"Skipped (equivalent): {len(plan.skipped_equivalent)}")
+    print(f"Skipped (local ahead): {len(plan.skipped_local_ahead)}")
     print(f"Duplicates: {len(plan.duplicates)}")
     print(f"Conflicts: {len(plan.conflicts)}")
+    print(f"Diverged conflicts: {len(plan.diverged)}")
     print(f"Failed: {len(plan.failures)}")
     if plan.import_plans:
         print("Imported sessions:")
@@ -458,10 +553,38 @@ def print_import_sessions_result(result: ImportSessionsResult) -> None:
                     sys.stdout.encoding,
                 )
             )
+    if plan.fast_forward_plans:
+        print("Fast-forwarded sessions:")
+        for import_plan in plan.fast_forward_plans:
+            print(
+                encode_for_output(
+                    f"- {import_plan.session_id} - {import_plan.thread_name} -> "
+                    f"{import_plan.target_path}",
+                    sys.stdout.encoding,
+                )
+            )
     if plan.skipped:
-        print("Skipped identical sessions:")
+        print("Skipped (identical) sessions:")
         for skipped in plan.skipped:
             print(encode_for_output(format_import_skipped_line(skipped), sys.stdout.encoding))
+    if plan.skipped_equivalent:
+        print("Skipped (equivalent) sessions:")
+        for history_skip in plan.skipped_equivalent:
+            print(
+                encode_for_output(
+                    format_import_history_skip_line(history_skip, "equivalent"),
+                    sys.stdout.encoding,
+                )
+            )
+    if plan.skipped_local_ahead:
+        print("Skipped (local ahead) sessions:")
+        for history_skip in plan.skipped_local_ahead:
+            print(
+                encode_for_output(
+                    format_import_history_skip_line(history_skip, "local ahead"),
+                    sys.stdout.encoding,
+                )
+            )
     if plan.duplicates:
         print("Duplicate input sessions:")
         for duplicate in plan.duplicates:
@@ -471,18 +594,31 @@ def print_import_sessions_result(result: ImportSessionsResult) -> None:
         print("Conflicts:")
         for conflict in plan.conflicts:
             print(encode_for_output(format_import_conflict_line(conflict), sys.stdout.encoding))
+    if plan.diverged:
+        print("Diverged conflicts:")
+        for diverged_conflict in plan.diverged:
+            for line in format_import_diverged_lines(diverged_conflict):
+                print(encode_for_output(line, sys.stdout.encoding))
     if plan.failures:
         print("Failed:")
         for failure in plan.failures:
             print(encode_for_output(format_import_failure_line(failure), sys.stdout.encoding))
     if result.session_index_backup_path is not None:
         print(f"Session index backup: {result.session_index_backup_path}")
+    if result.rollout_backup_paths:
+        print("Rollout backups:")
+        for backup_path in result.rollout_backup_paths:
+            print(backup_path)
     if result.state_cache_backups:
         print("State cache backups:")
         for backup in result.state_cache_backups:
             print(f"{backup.original_path} -> {backup.backup_path}")
-    elif plan.import_plans:
+    elif plan.import_plans or plan.fast_forward_plans:
         print("No Codex state cache files found to reset.")
+    title_update_lines: list[str] = []
+    append_import_title_update_lines(title_update_lines, plan, "updated")
+    for line in title_update_lines:
+        print(encode_for_output(line, sys.stdout.encoding))
 
 
 def run_import_command(args: argparse.Namespace) -> int:
@@ -504,6 +640,7 @@ def run_import_command(args: argparse.Namespace) -> int:
                 session_index_path=session_index_path,
                 sessions_dir=sessions_dir,
                 name=args.name,
+                merge=args.merge,
             )
         except (CliError, ValueError) as exc:
             raise SystemExit(str(exc)) from exc
@@ -518,6 +655,7 @@ def run_import_command(args: argparse.Namespace) -> int:
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
             name=args.name,
+            merge=args.merge,
         )
     except (CliError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc

@@ -34,6 +34,7 @@ class ImportSessionPlan:
     existing_index_thread_name: str | None
     source_fingerprint: FileFingerprint
     rollout_will_be_rewritten: bool
+    replaces_existing_rollout: bool = False
 
 
 @dataclass(frozen=True)
@@ -52,12 +53,34 @@ class ImportSkippedSession:
 
 
 @dataclass(frozen=True)
+class ImportSkippedHistory:
+    source_path: Path
+    existing_path: Path
+    session_id: str
+    common_comparable_records: int
+    existing_tail_comparable_records: int
+    incoming_tail_comparable_records: int
+
+
+@dataclass(frozen=True)
 class ImportConflict:
     source_path: Path
     existing_path: Path
     session_id: str
     source_fingerprint: FileFingerprint
     existing_fingerprint: FileFingerprint | None
+
+
+@dataclass(frozen=True)
+class ImportDivergedConflict:
+    source_path: Path
+    existing_path: Path
+    session_id: str
+    source_fingerprint: FileFingerprint
+    existing_fingerprint: FileFingerprint
+    common_comparable_records: int
+    existing_tail_comparable_records: int
+    incoming_tail_comparable_records: int
 
 
 @dataclass(frozen=True)
@@ -75,9 +98,13 @@ class ImportDuplicateSession:
 @dataclass(frozen=True)
 class ImportSessionsPlan:
     import_plans: tuple[ImportSessionPlan, ...]
+    fast_forward_plans: tuple[ImportSessionPlan, ...]
     skipped: tuple[ImportSkippedSession, ...]
+    skipped_equivalent: tuple[ImportSkippedHistory, ...]
+    skipped_local_ahead: tuple[ImportSkippedHistory, ...]
     duplicates: tuple[ImportDuplicateSession, ...]
     conflicts: tuple[ImportConflict, ...]
+    diverged: tuple[ImportDivergedConflict, ...]
     failures: tuple[ImportFailure, ...]
 
 
@@ -85,6 +112,7 @@ class ImportSessionsPlan:
 class ImportSessionsResult:
     plan: ImportSessionsPlan
     session_index_backup_path: Path | None
+    rollout_backup_paths: tuple[Path, ...]
     state_cache_backups: tuple[StateCacheBackup, ...]
 
 
