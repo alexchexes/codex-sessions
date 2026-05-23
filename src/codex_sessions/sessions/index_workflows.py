@@ -18,9 +18,10 @@ from codex_sessions.codex.state import (
 from codex_sessions.errors import CliError
 from codex_sessions.search.sessions import load_search_documents
 from codex_sessions.sessions.display import (
-    NO_ROLLOUT_FILE,
-    format_indexed_session_line,
-    format_unindexed_session_line,
+    SessionDisplayInfo,
+    format_session_display_info,
+    indexed_session_display_info,
+    unindexed_session_display_info,
 )
 from codex_sessions.sessions.documents import (
     infer_search_document_title,
@@ -63,6 +64,8 @@ class RepairIndexResult:
     skipped_without_id: int
     session_index_backup_path: Path | None
     state_cache_backups: tuple[StateCacheBackup, ...]
+    state_cache_reset_error: str | None
+    state_cache_reset_skipped: bool
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,8 @@ class RenameSessionResult:
     changed: bool
     session_index_backup_path: Path | None
     state_cache_backups: tuple[StateCacheBackup, ...]
+    state_cache_reset_error: str | None
+    state_cache_reset_skipped: bool
 
 
 def list_session_lines(
@@ -88,14 +93,14 @@ def list_session_lines(
     use_cache: bool = True,
     rebuild_cache: bool = False,
 ) -> list[str]:
-    lines, _ = list_session_lines_with_warnings(
+    infos, _ = list_session_display_infos_with_warnings(
         codex_home=codex_home,
         session_index_path=session_index_path,
         sessions_dir=sessions_dir,
         use_cache=use_cache,
         rebuild_cache=rebuild_cache,
     )
-    return lines
+    return [format_session_display_info(info) for info in infos]
 
 
 def list_session_lines_with_warnings(
@@ -106,6 +111,24 @@ def list_session_lines_with_warnings(
     use_cache: bool = True,
     rebuild_cache: bool = False,
 ) -> tuple[list[str], list[str]]:
+    infos, warnings = list_session_display_infos_with_warnings(
+        codex_home=codex_home,
+        session_index_path=session_index_path,
+        sessions_dir=sessions_dir,
+        use_cache=use_cache,
+        rebuild_cache=rebuild_cache,
+    )
+    return [format_session_display_info(info) for info in infos], warnings
+
+
+def list_session_display_infos_with_warnings(
+    codex_home: Path,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    *,
+    use_cache: bool = True,
+    rebuild_cache: bool = False,
+) -> tuple[list[SessionDisplayInfo], list[str]]:
     index_path = session_index_path or codex_home / "session_index.jsonl"
     resolved_sessions_dir = sessions_dir or codex_home / "sessions"
 
@@ -137,21 +160,21 @@ def list_session_lines_with_warnings(
             session_files_by_id.setdefault(normalized_id, []).append(session_file)
 
     indexed_ids = {normalize_session_id(entry.session_id) for entry in index_entries}
-    lines = []
+    infos = []
     for entry in index_entries:
         matching_files = session_files_by_id.get(normalize_session_id(entry.session_id), [])
         if not matching_files:
-            lines.append(f"{entry.session_id} - {entry.thread_name} - {NO_ROLLOUT_FILE}")
+            infos.append(indexed_session_display_info(entry, None))
             continue
         session_file = matching_files[0]
-        lines.append(format_indexed_session_line(entry, session_file))
+        infos.append(indexed_session_display_info(entry, session_file))
 
     for session_file, inferred_title in session_files_with_titles:
         if session_file.session_id and normalize_session_id(session_file.session_id) in indexed_ids:
             continue
-        lines.append(format_unindexed_session_line(session_file, inferred_title))
+        infos.append(unindexed_session_display_info(session_file, inferred_title))
 
-    return lines, warnings
+    return infos, warnings
 
 
 def missing_session_index_candidates(
@@ -211,6 +234,8 @@ def rename_session_index_entry(
     session_index_path: Path | None,
     target: str,
     new_thread_name: str,
+    *,
+    reset_state_cache: bool = True,
 ) -> RenameSessionResult:
     normalized_new_thread_name = new_thread_name.strip()
     if not normalized_new_thread_name:
@@ -248,6 +273,8 @@ def rename_session_index_entry(
             changed=False,
             session_index_backup_path=None,
             state_cache_backups=(),
+            state_cache_reset_error=None,
+            state_cache_reset_skipped=False,
         )
 
     updated_records = list(records)
@@ -271,7 +298,6 @@ def rename_session_index_entry(
             if rollout_path is None or updated_rollout_records is None:
                 raise CliError(f"No Codex rollout file found for ID: {session_id}")
             write_rollout_records(rollout_path, updated_rollout_records)
-        state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
     except (CliError, CodexStateError, OSError) as exc:
         try:
             if rollout_path is not None and rollout_changed:
@@ -287,6 +313,15 @@ def rename_session_index_entry(
             f"{exc} Rolled back Codex session files. Close all Codex sessions and retry."
         ) from exc
 
+    state_cache_backups: tuple[StateCacheBackup, ...] = ()
+    state_cache_reset_error = None
+    if reset_state_cache:
+        try:
+            state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
+        except (CodexStateError, OSError) as exc:
+            state_cache_reset_error = str(exc)
+            remove_backup_dir_if_empty(backup_dir)
+
     return RenameSessionResult(
         session_id=session_id,
         old_thread_name=old_thread_name,
@@ -299,6 +334,8 @@ def rename_session_index_entry(
         changed=True,
         session_index_backup_path=index_backup_path,
         state_cache_backups=state_cache_backups,
+        state_cache_reset_error=state_cache_reset_error,
+        state_cache_reset_skipped=not reset_state_cache,
     )
 
 
@@ -309,6 +346,7 @@ def repair_session_index(
     *,
     use_cache: bool = True,
     rebuild_cache: bool = False,
+    reset_state_cache: bool = True,
 ) -> RepairIndexResult:
     index_path = session_index_path or codex_home / "session_index.jsonl"
     candidates, warnings, skipped_without_id = missing_session_index_candidates(
@@ -325,6 +363,8 @@ def repair_session_index(
             skipped_without_id=skipped_without_id,
             session_index_backup_path=None,
             state_cache_backups=(),
+            state_cache_reset_error=None,
+            state_cache_reset_skipped=False,
         )
 
     label = backup_label()
@@ -332,7 +372,6 @@ def repair_session_index(
     index_backup_path = backup_session_index(index_path, backup_dir)
     try:
         append_session_index_records(index_path, candidates)
-        state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
     except (CliError, CodexStateError, OSError) as exc:
         try:
             restore_session_index_backup(index_path, index_backup_path)
@@ -345,10 +384,21 @@ def repair_session_index(
             f"{exc} Rolled back session_index.jsonl. Close all Codex sessions and retry."
         ) from exc
 
+    state_cache_backups: tuple[StateCacheBackup, ...] = ()
+    state_cache_reset_error = None
+    if reset_state_cache:
+        try:
+            state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
+        except (CodexStateError, OSError) as exc:
+            state_cache_reset_error = str(exc)
+            remove_backup_dir_if_empty(backup_dir)
+
     return RepairIndexResult(
         candidates=tuple(candidates),
         warnings=tuple(warnings),
         skipped_without_id=skipped_without_id,
         session_index_backup_path=index_backup_path,
         state_cache_backups=state_cache_backups,
+        state_cache_reset_error=state_cache_reset_error,
+        state_cache_reset_skipped=not reset_state_cache,
     )

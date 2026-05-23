@@ -22,6 +22,10 @@ from codex_sessions.cli_args import (  # noqa: E402
     parse_markdown_include,
     resolve_markdown_tool_mode,
 )
+from codex_sessions.core.terminal import (  # noqa: E402
+    console_color_options,
+    encode_for_output,
+)
 from codex_sessions.core.timestamps import parse_timestamp  # noqa: E402
 from codex_sessions.formats.markdown.output import (  # noqa: E402
     MarkdownOptions,
@@ -30,10 +34,6 @@ from codex_sessions.formats.markdown.output import (  # noqa: E402
 )
 from codex_sessions.formats.yaml import convert_jsonl_to_yaml_stream  # noqa: E402
 from codex_sessions.search.cache import search_cache_path  # noqa: E402
-from codex_sessions.search.output import (  # noqa: E402
-    console_color_options,
-    encode_for_output,
-)
 from codex_sessions.sessions.display import (  # noqa: E402
     format_local_timestamp,
     local_timezone_offset_label,
@@ -1293,8 +1293,9 @@ class CliTests(unittest.TestCase):
             ]
             self.assertEqual(result, 0)
             self.assertIn("Added session_index.jsonl entries: 1", output)
-            self.assertIn("Session index backup:", output)
-            self.assertIn("State cache backups:", output)
+            self.assertIn("Backups:", output)
+            self.assertIn("Index:", output)
+            self.assertIn("Backups:", output)
             self.assertEqual(index_records[-1]["id"], missing_id)
             self.assertEqual(index_records[-1]["thread_name"], "Repair the real index entry.")
             self.assertEqual(index_records[-1]["updated_at"], "2026-04-30T18:21:39Z")
@@ -1316,7 +1317,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(list(codex_home.glob("state_5.sqlite.backup-*")), [])
             self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
 
-    def test_repair_index_rolls_back_index_when_state_reset_fails(self) -> None:
+    def test_repair_index_keeps_index_when_state_reset_is_deferred(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
             sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
@@ -1325,7 +1326,6 @@ class CliTests(unittest.TestCase):
             missing_id = "90909090-9090-9090-9090-909090909090"
             index_path = codex_home / "session_index.jsonl"
             write_jsonl(index_path, [{"id": "11111111-1111-1111-1111-111111111111"}])
-            original_index = index_path.read_text(encoding="utf-8")
             write_jsonl(
                 sessions_day / f"rollout-2026-04-30T18-21-39-{missing_id}.jsonl",
                 [
@@ -1345,15 +1345,19 @@ class CliTests(unittest.TestCase):
                 "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
                 side_effect=OSError("locked"),
             ):
-                with self.assertRaises(SystemExit) as raised:
-                    main(["repair-index", "--codex-home", str(codex_home)])
+                buffer = StringIO()
+                with redirect_stdout(buffer):
+                    result = main(["repair-index", "--codex-home", str(codex_home)])
 
-            self.assertIn("Rolled back session_index.jsonl", str(raised.exception))
-            self.assertEqual(index_path.read_text(encoding="utf-8"), original_index)
-            self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("State cache reset deferred:", output)
+            self.assertIn("\n  locked", output)
+            self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertEqual(read_jsonl(index_path)[-1]["id"], missing_id)
             self.assertEqual(
-                list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl")),
-                [],
+                len(list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl"))),
+                1,
             )
 
     def test_rename_updates_index_and_resets_state_cache(self) -> None:
@@ -1398,11 +1402,14 @@ class CliTests(unittest.TestCase):
                 if line
             ]
             self.assertEqual(result, 0)
-            self.assertIn(f"Renamed session: {session_id}", output)
-            self.assertIn("From: Old title", output)
-            self.assertIn("To: New title", output)
-            self.assertIn("Session index backup:", output)
-            self.assertIn("State cache backups:", output)
+            self.assertIn(f"Renamed session {session_id}", output)
+            self.assertIn("From:", output)
+            self.assertIn("Old title", output)
+            self.assertIn("To:", output)
+            self.assertIn("New title", output)
+            self.assertIn("Backups:", output)
+            self.assertIn("Index backup:", output)
+            self.assertIn("Backups:", output)
             self.assertEqual(index_records[0]["thread_name"], "New title")
             self.assertEqual(index_records[0]["updated_at"], "2026-04-30T18:21:39Z")
             self.assertEqual(index_records[0]["extra"], "preserved")
@@ -1471,8 +1478,8 @@ class CliTests(unittest.TestCase):
             ]
             backup_dirs = sorted((codex_home / "backups" / "codex-sessions").iterdir())
             self.assertEqual(result, 0)
-            self.assertIn("Session index title was already set.", output)
-            self.assertIn("Rollout title from: Old rollout title", output)
+            self.assertIn("From (rollout):", output)
+            self.assertIn("Old rollout title", output)
             self.assertEqual(
                 rollout_records[0]["payload"]["thread_name"],
                 "New title",
@@ -1516,15 +1523,18 @@ class CliTests(unittest.TestCase):
                 ],
             )
 
-            with redirect_stdout(StringIO()):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
                 result = main(["rename", "--codex-home", str(codex_home), session_id, "New"])
 
+            output = buffer.getvalue()
             rollout_records = [
                 json.loads(line)
                 for line in rollout_path.read_text(encoding="utf-8").splitlines()
                 if line
             ]
             self.assertEqual(result, 0)
+            self.assertNotIn("From (rollout):", output)
             self.assertEqual(rollout_records[0]["type"], "session_meta")
             self.assertEqual(rollout_records[1]["type"], "event_msg")
             self.assertEqual(rollout_records[1]["timestamp"], "2026-04-30T18:20:39Z")
@@ -1561,20 +1571,19 @@ class CliTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertEqual(index_records[0]["thread_name"], "New exact title")
 
-    def test_rename_rolls_back_index_when_state_reset_fails(self) -> None:
+    def test_rename_keeps_index_when_state_reset_is_deferred(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
             session_id = "14141414-1414-1414-1414-141414141414"
             index_path = codex_home / "session_index.jsonl"
             write_jsonl(index_path, [{"id": session_id, "thread_name": "Old title"}])
-            original_index = index_path.read_text(encoding="utf-8")
-
             with patch(
                 "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
                 side_effect=OSError("locked"),
             ):
-                with self.assertRaises(SystemExit) as raised:
-                    main(
+                buffer = StringIO()
+                with redirect_stdout(buffer):
+                    result = main(
                         [
                             "rename",
                             "--codex-home",
@@ -1584,13 +1593,54 @@ class CliTests(unittest.TestCase):
                         ]
                     )
 
-            self.assertIn("Rolled back Codex session files", str(raised.exception))
-            self.assertEqual(index_path.read_text(encoding="utf-8"), original_index)
-            self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("State cache reset deferred:", output)
+            self.assertIn("\n  locked", output)
+            self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertEqual(read_jsonl(index_path)[0]["thread_name"], "New title")
             self.assertEqual(
-                list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl")),
-                [],
+                len(list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl"))),
+                1,
             )
+
+    def test_rename_interactive_state_reset_retry_reports_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            session_id = "14141414-1515-1616-1717-181818181818"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Old title"}],
+            )
+
+            with (
+                patch(
+                    "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
+                    side_effect=OSError("locked"),
+                ),
+                patch(
+                    "codex_sessions.cli.can_retry_state_cache_reset_interactively",
+                    return_value=True,
+                ),
+                patch("builtins.input", return_value=""),
+            ):
+                buffer = StringIO()
+                with redirect_stdout(buffer):
+                    result = main(
+                        [
+                            "rename",
+                            "--codex-home",
+                            str(codex_home),
+                            session_id,
+                            "New title",
+                        ]
+                    )
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("State cache reset deferred:", output)
+            self.assertIn("Retrying state cache reset...", output)
+            self.assertIn("State cache reset OK.", output)
 
     def test_import_dry_run_reports_plan_without_modifying_codex_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1624,11 +1674,12 @@ class CliTests(unittest.TestCase):
             output = buffer.getvalue()
             target_path = codex_home / "sessions" / "2026" / "04" / "30" / source_path.name
             self.assertEqual(result, 0)
-            self.assertIn(f"Session: {session_id} - Import dry run title", output)
-            self.assertIn(f"Target rollout: {target_path}", output)
+            self.assertIn(f"{session_id} - Import dry run title", output)
+            self.assertIn("Target:", output)
+            self.assertIn(str(target_path), output)
             self.assertIn("Index action: add session_index.jsonl entry", output)
-            self.assertIn("Rollout action: copy unchanged", output)
-            self.assertIn("Source fingerprint:", output)
+            self.assertIn("Action:      copy unchanged", output)
+            self.assertIn("Fingerprint:", output)
             self.assertFalse(target_path.exists())
             self.assertFalse((codex_home / "session_index.jsonl").exists())
 
@@ -1674,9 +1725,10 @@ class CliTests(unittest.TestCase):
             index_records = read_jsonl(codex_home / "session_index.jsonl")
             backup_dirs = sorted((codex_home / "backups" / "codex-sessions").iterdir())
             self.assertEqual(result, 0)
-            self.assertIn(f"Imported session: {session_id} - Imported title", output)
+            self.assertIn("Imported session:", output)
+            self.assertIn(f"{session_id} - Imported title", output)
             self.assertIn("Index action: add session_index.jsonl entry", output)
-            self.assertIn("State cache backups:", output)
+            self.assertIn("Backups:", output)
             self.assertEqual(
                 target_path.read_text(encoding="utf-8"), source_path.read_text(encoding="utf-8")
             )
@@ -1695,6 +1747,89 @@ class CliTests(unittest.TestCase):
             self.assertEqual(
                 (backup_dirs[0] / "state_5.sqlite").read_text(encoding="utf-8"), "state"
             )
+
+    def test_import_can_skip_state_cache_reset_for_scripted_follow_up(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            session_id = "18181818-2929-2929-2929-292929292929"
+            source_path = source_dir / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            write_jsonl(
+                source_path,
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "thread_name_updated",
+                            "thread_id": session_id,
+                            "thread_name": "Deferred reset import",
+                        },
+                    }
+                ],
+            )
+            state_db = codex_home / "state_5.sqlite"
+            state_db.parent.mkdir(parents=True)
+            state_db.write_text("state", encoding="utf-8")
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(
+                    [
+                        "import",
+                        "--no-reset-state-cache",
+                        "--codex-home",
+                        str(codex_home),
+                        str(source_path),
+                    ]
+                )
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("State cache reset skipped.", output)
+            self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertTrue(state_db.exists())
+            self.assertEqual(
+                list(codex_home.glob("backups/codex-sessions/*/state_5.sqlite")),
+                [],
+            )
+
+    def test_reset_state_cache_command_backs_up_live_state_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            state_db = codex_home / "state_5.sqlite"
+            state_wal = codex_home / "state_5.sqlite-wal"
+            state_db.write_text("state", encoding="utf-8")
+            state_wal.write_text("wal", encoding="utf-8")
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["reset-state-cache", "--codex-home", str(codex_home)])
+
+            output = buffer.getvalue()
+            backup_dirs = sorted((codex_home / "backups" / "codex-sessions").iterdir())
+            self.assertEqual(result, 0)
+            self.assertIn("Backups:", output)
+            self.assertFalse(state_db.exists())
+            self.assertFalse(state_wal.exists())
+            self.assertEqual(len(backup_dirs), 1)
+            self.assertEqual((backup_dirs[0] / state_db.name).read_text(encoding="utf-8"), "state")
+            self.assertEqual((backup_dirs[0] / state_wal.name).read_text(encoding="utf-8"), "wal")
+
+    def test_reset_state_cache_command_fails_when_reset_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+
+            with patch(
+                "codex_sessions.cli.reset_codex_state_cache_with_backup",
+                side_effect=OSError("locked"),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    main(["reset-state-cache", "--codex-home", str(codex_home)])
+
+            self.assertIn("locked", str(raised.exception))
 
     def test_import_inserts_rollout_title_event_when_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1766,7 +1901,7 @@ class CliTests(unittest.TestCase):
 
             output = buffer.getvalue()
             self.assertEqual(result, 0)
-            self.assertIn("Imported: 0", output)
+            self.assertIn("Sessions added: 0", output)
             self.assertIn("Skipped (identical): 1", output)
             self.assertIn("SKIPPED (identical)", output)
             self.assertIn("sha256", output)
@@ -1814,9 +1949,9 @@ class CliTests(unittest.TestCase):
 
             output = buffer.getvalue()
             self.assertEqual(result, 1)
-            self.assertIn("Conflicts: 1", output)
-            self.assertIn("CONFLICT", output)
-            self.assertIn("Existing:", output)
+            self.assertIn("ID conflicts: 1", output)
+            self.assertIn("ID conflict", output)
+            self.assertIn("Local:", output)
             self.assertIn("Import:", output)
             self.assertIn("sha256", output)
 
@@ -1873,12 +2008,12 @@ class CliTests(unittest.TestCase):
                 (codex_home / "backups" / "codex-sessions").glob(f"*/{target_path.name}")
             )
             self.assertEqual(result, 0)
-            self.assertIn("Imported: 0", output)
+            self.assertIn("Sessions added: 0", output)
             self.assertIn("Fast-forwarded: 1", output)
-            self.assertIn("Rollout backups:", output)
+            self.assertIn("Rollout:", output)
             self.assertIn("Titles updated:", output)
             self.assertIn("From: Local merge title", output)
-            self.assertIn("To: Incoming merge title", output)
+            self.assertIn("To:   Incoming merge title", output)
             self.assertEqual(read_jsonl(target_path), incoming_records)
             self.assertEqual(index_records[0]["thread_name"], "Incoming merge title")
             self.assertEqual(index_records[0]["updated_at"], "2026-04-30T18:22:39Z")
@@ -2015,12 +2150,12 @@ class CliTests(unittest.TestCase):
             output = buffer.getvalue()
             self.assertEqual(result, 1)
             self.assertIn("Diverged conflicts: 1", output)
-            self.assertIn(f"DIVERGED {session_id}", output)
-            self.assertIn("Common comparable records: 1", output)
+            self.assertIn(f"Diverged {session_id}", output)
+            self.assertIn("Common records:     1", output)
             self.assertEqual(read_jsonl(target_path), local_records)
             self.assertFalse((codex_home / "session_index.jsonl").exists())
 
-    def test_import_merge_rolls_back_fast_forward_when_state_reset_fails(self) -> None:
+    def test_import_merge_keeps_fast_forward_when_state_reset_is_deferred(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             codex_home = root / "codex"
@@ -2042,29 +2177,39 @@ class CliTests(unittest.TestCase):
                     }
                 ],
             )
-            original_index = index_path.read_text(encoding="utf-8")
             local_records = [
                 {"type": "session_meta", "payload": {"id": session_id}},
                 import_user_message("common", "2026-04-30T18:21:39Z"),
             ]
             write_jsonl(target_path, local_records)
-            original_rollout = target_path.read_text(encoding="utf-8")
-            write_jsonl(
-                source_path,
-                [*local_records, import_user_message("incoming tail", "2026-04-30T18:22:39Z")],
-            )
+            incoming_records = [
+                *local_records,
+                import_user_message("incoming tail", "2026-04-30T18:22:39Z"),
+            ]
+            write_jsonl(source_path, incoming_records)
 
             with patch(
                 "codex_sessions.sessions.transfer.reset_codex_state_cache",
                 side_effect=OSError("locked"),
             ):
-                with self.assertRaises(SystemExit) as raised:
-                    main(["import", "--merge", "--codex-home", str(codex_home), str(source_path)])
+                buffer = StringIO()
+                with redirect_stdout(buffer):
+                    result = main(
+                        ["import", "--merge", "--codex-home", str(codex_home), str(source_path)]
+                    )
 
-            self.assertIn("Rolled back imported Codex session files", str(raised.exception))
-            self.assertEqual(index_path.read_text(encoding="utf-8"), original_index)
-            self.assertEqual(target_path.read_text(encoding="utf-8"), original_rollout)
-            self.assertEqual(list((codex_home / "backups").rglob(target_path.name)), [])
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("State cache reset deferred:", output)
+            self.assertIn("\n  locked", output)
+            self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertEqual(read_jsonl(index_path)[0]["updated_at"], "2026-04-30T18:22:39Z")
+            target_records = read_jsonl(target_path)
+            self.assertEqual(target_records[0], incoming_records[0])
+            self.assertEqual(target_records[1]["payload"]["type"], "thread_name_updated")
+            self.assertEqual(target_records[1]["payload"]["thread_name"], "Rollback merge title")
+            self.assertEqual(target_records[2:], incoming_records[1:])
+            self.assertEqual(len(list((codex_home / "backups").rglob(target_path.name))), 1)
 
     def test_import_existing_index_without_rollout_uses_existing_index_title(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2106,7 +2251,7 @@ class CliTests(unittest.TestCase):
                 index_records, [{"id": session_id, "thread_name": "Existing index title"}]
             )
 
-    def test_import_rolls_back_index_and_target_rollout_when_state_reset_fails(self) -> None:
+    def test_import_keeps_index_and_target_rollout_when_state_reset_is_deferred(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             codex_home = root / "codex"
@@ -2116,7 +2261,6 @@ class CliTests(unittest.TestCase):
             session_id = "28282828-2828-2828-2828-282828282828"
             index_path = codex_home / "session_index.jsonl"
             write_jsonl(index_path, [{"id": "11111111-1111-1111-1111-111111111111"}])
-            original_index = index_path.read_text(encoding="utf-8")
             source_path = source_dir / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
             write_jsonl(
                 source_path,
@@ -2138,15 +2282,20 @@ class CliTests(unittest.TestCase):
                 "codex_sessions.sessions.transfer.reset_codex_state_cache",
                 side_effect=OSError("locked"),
             ):
-                with self.assertRaises(SystemExit) as raised:
-                    main(["import", "--codex-home", str(codex_home), str(source_path)])
+                buffer = StringIO()
+                with redirect_stdout(buffer):
+                    result = main(["import", "--codex-home", str(codex_home), str(source_path)])
 
-            self.assertIn("Rolled back imported Codex session files", str(raised.exception))
-            self.assertEqual(index_path.read_text(encoding="utf-8"), original_index)
-            self.assertFalse(target_path.exists())
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("State cache reset deferred:", output)
+            self.assertIn("\n  locked", output)
+            self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertEqual(read_jsonl(index_path)[-1]["id"], session_id)
+            self.assertTrue(target_path.exists())
             self.assertEqual(
-                list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl")),
-                [],
+                len(list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl"))),
+                1,
             )
 
     def test_import_reports_missing_input_without_writing_index(self) -> None:
@@ -2367,9 +2516,9 @@ class CliTests(unittest.TestCase):
                 (codex_home / "backups" / "codex-sessions").glob("*/state_5.sqlite")
             )
             self.assertEqual(result, 1)
-            self.assertIn("Imported: 1", output)
+            self.assertIn("Sessions added: 1", output)
             self.assertIn("Skipped (identical): 1", output)
-            self.assertIn("Conflicts: 1", output)
+            self.assertIn("ID conflicts: 1", output)
             self.assertTrue(imported_path.exists())
             self.assertEqual(index_records[0]["id"], new_id)
             self.assertFalse(state_db.exists())
@@ -2429,7 +2578,7 @@ class CliTests(unittest.TestCase):
             imported_files = sorted((codex_home / "sessions").rglob("*.jsonl"))
             index_records = read_jsonl(codex_home / "session_index.jsonl")
             self.assertEqual(result, 1)
-            self.assertIn("Imported: 1", output)
+            self.assertIn("Sessions added: 1", output)
             self.assertIn("Duplicates: 1", output)
             self.assertIn(f"DUPLICATE {duplicate_id}", output)
             self.assertIn(str(duplicate_first.resolve()), output)
@@ -2485,7 +2634,7 @@ class CliTests(unittest.TestCase):
             imported_files = sorted((codex_home / "sessions").rglob("*.jsonl"))
             index_records = read_jsonl(codex_home / "session_index.jsonl")
             self.assertEqual(result, 0)
-            self.assertIn("Imported: 2", output)
+            self.assertIn("Sessions added: 2", output)
             self.assertEqual(len(imported_files), 2)
             self.assertEqual(
                 [record["thread_name"] for record in index_records],
@@ -2574,7 +2723,8 @@ class CliTests(unittest.TestCase):
             exported_records = read_jsonl(exported_path)
             source_records = read_jsonl(rollout_path)
             self.assertEqual(result, 0)
-            self.assertIn(f"Exported session: {session_id} - Index title for export", output)
+            self.assertIn("Exported: ", output)
+            self.assertIn(f"{session_id} - Index title for export", output)
             self.assertTrue(exported_path.exists())
             self.assertEqual(
                 exported_records[0]["payload"]["thread_name"], "Index title for export"
@@ -2625,7 +2775,7 @@ class CliTests(unittest.TestCase):
 
             output = buffer.getvalue()
             self.assertEqual(result, 0)
-            self.assertIn("Rollout action: copy unchanged", output)
+            self.assertIn("Action: copy unchanged", output)
             self.assertEqual(
                 output_path.read_text(encoding="utf-8"), rollout_path.read_text(encoding="utf-8")
             )
@@ -2669,9 +2819,10 @@ class CliTests(unittest.TestCase):
 
             output = buffer.getvalue()
             self.assertEqual(result, 0)
-            self.assertIn(f"Session: {session_id} - Dry export title", output)
-            self.assertIn(f"Output rollout: {output_path}", output)
-            self.assertIn("Rollout action: copy with rollout title event update", output)
+            self.assertIn(f"{session_id} - Dry export title", output)
+            self.assertIn("Output:", output)
+            self.assertIn(str(output_path), output)
+            self.assertIn("Action: copy with rollout title event update", output)
             self.assertFalse(output_path.exists())
 
     def test_export_refuses_existing_output_unless_force_is_used(self) -> None:
@@ -3075,6 +3226,8 @@ class CliTests(unittest.TestCase):
             second_output = output_dir / f"2026-04-30--Second-bulk-export--{second_id}.jsonl"
             self.assertEqual(result, 0)
             self.assertIn("Exported sessions: 2", output)
+            self.assertNotIn(first_id, output)
+            self.assertNotIn(second_id, output)
             self.assertTrue(first_output.exists())
             self.assertTrue(second_output.exists())
             self.assertEqual(
@@ -3883,7 +4036,7 @@ class CliTests(unittest.TestCase):
     def test_color_auto_forces_terminal_for_git_bash_pipe(self) -> None:
         git_bash_env = {"TERM": "xterm-256color", "MSYSTEM": "MINGW64"}
         with patch(
-            "codex_sessions.search.output.is_windows_pipe_stream",
+            "codex_sessions.core.terminal.is_windows_pipe_stream",
             return_value=True,
         ):
             self.assertEqual(
@@ -3894,7 +4047,7 @@ class CliTests(unittest.TestCase):
     def test_color_auto_does_not_force_for_git_bash_disk_redirect(self) -> None:
         git_bash_env = {"TERM": "xterm-256color", "MSYSTEM": "MINGW64"}
         with patch(
-            "codex_sessions.search.output.is_windows_pipe_stream",
+            "codex_sessions.core.terminal.is_windows_pipe_stream",
             return_value=False,
         ):
             self.assertEqual(
@@ -3915,6 +4068,26 @@ class CliTests(unittest.TestCase):
             console_color_options("auto", StringIO(), {"FORCE_COLOR": "1"}),
             (True, False),
         )
+
+    def test_force_color_styles_general_cli_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            codex_home.joinpath("sessions").mkdir()
+            session_id = "04040404-0505-0606-0707-080808080808"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Color title"}],
+            )
+
+            buffer = StringIO()
+            with patch.dict(os.environ, {"FORCE_COLOR": "1"}, clear=False):
+                with redirect_stdout(buffer):
+                    result = main(["list", "--codex-home", str(codex_home)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("\x1b[", output)
+            self.assertIn("Color title", output)
 
     def test_find_returns_one_when_no_matches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

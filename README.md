@@ -172,8 +172,9 @@ codex-sessions repair-index
 `repair-index --dry-run` does not modify Codex state. The real repair command
 backs up `session_index.jsonl` under `backups/codex-sessions/`, appends missing
 entries, and resets Codex state cache by moving root `state_*.sqlite*` files
-into the same backup folder. If state cache reset fails, the index write is
-rolled back; close all Codex sessions and retry.
+into the same backup folder. If state cache reset is blocked by a running Codex
+session, the repaired index stays written and the command prompts for a retry
+in an interactive terminal.
 
 Rename a session in `session_index.jsonl`:
 
@@ -247,12 +248,29 @@ events to match the chosen titles, and resets Codex state cache once after
 making backups under `backups/codex-sessions/`. Use `--name` to set the
 imported title explicitly when importing one rollout file. Already-present
 identical sessions are skipped. Duplicate session IDs inside one import input
-are reported and refused as ambiguous. Existing sessions with different rollout
-content are reported as conflicts and are not overwritten; other safe sessions
-from the same bulk import are still imported. With `--merge`, imports also
+are reported and refused as ambiguous. Existing sessions with the same ID but
+different rollout content are reported as ID conflicts and are not overwritten;
+other safe sessions from the same bulk import are still imported. With
+`--merge`, imports also
 fast-forward local rollouts when their comparable history is a prefix of the
 incoming rollout. Equivalent histories and locally ahead histories are skipped;
 diverged histories are reported and left untouched.
+
+Commands that change Codex sessions try to reset the state cache after writing
+their rollout or `session_index.jsonl` changes. If the root `state_*.sqlite*`
+files are locked, the successful session changes stay written. In an
+interactive terminal the command prompts after the lock failure so you can
+close Codex and retry. Use `--non-interactive` to avoid that prompt, or
+`--no-reset-state-cache` to skip the automatic attempt and control refresh from
+a script:
+
+```bash
+codex-sessions import --merge --no-reset-state-cache ./exports/
+codex-sessions reset-state-cache
+```
+
+`reset-state-cache` backs up the live cache files before moving them out of
+Codex home and returns a nonzero status if the reset cannot run.
 
 Search all Codex sessions:
 
@@ -287,9 +305,12 @@ By default, `find` shows up to 5 matching lines per session. Use `-m` or
 `--max-lines-per-session` to change the limit, or pass `0` to show all matching
 lines.
 
-Matches are highlighted with terminal colors by default when stdout is a
-terminal, including Git Bash/MSYS terminals on Windows. Use `--color always` or
-`--color never` to override auto-detection.
+The CLI uses terminal colors by default when stdout is a terminal, including Git
+Bash/MSYS terminals on Windows. `find` highlights matches; other commands use
+color for timestamps, section headings, secondary paths, and attention states.
+`find --color always` or `find --color never` overrides search highlighting
+auto-detection. Standard `NO_COLOR`, `CLICOLOR=0`, `FORCE_COLOR`, and
+`CLICOLOR_FORCE` environment flags apply to auto-detected CLI colors.
 
 Search caches extracted searchable text under
 `~/.codex/cache/codex-sessions/search-v3.json` and invalidates entries when the
@@ -367,7 +388,7 @@ names and call IDs.
   compactly in Markdown.
 - Markdown metadata tables escape pipe characters and replace embedded newlines
   with `<br>`.
-- The tool uses Rich for colored search output.
+- The tool uses Rich for colored terminal output.
 
 ## License
 

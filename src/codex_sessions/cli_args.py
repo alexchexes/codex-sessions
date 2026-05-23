@@ -192,6 +192,7 @@ def parse_repair_index_args(
         action="store_true",
         help="Show missing session_index.jsonl entries without modifying Codex state.",
     )
+    add_state_cache_reset_control_args(parser)
     parser.add_argument(
         "--codex-home",
         type=Path,
@@ -230,6 +231,7 @@ def parse_rename_args(
     )
     parser.add_argument("target", help="Session ID or exact current session title.")
     parser.add_argument("name", nargs="+", help="New session title.")
+    add_state_cache_reset_control_args(parser)
     parser.add_argument(
         "--codex-home",
         type=Path,
@@ -266,6 +268,7 @@ def parse_import_args(
         action="store_true",
         help="Fast-forward existing sessions when imported rollout history is safely ahead.",
     )
+    add_state_cache_reset_control_args(parser)
     parser.add_argument(
         "--name",
         "--rename",
@@ -287,6 +290,37 @@ def parse_import_args(
         "--sessions-dir",
         type=Path,
         help="Path to Codex sessions directory. Defaults to <codex-home>/sessions.",
+    )
+    return parser.parse_args(argv)
+
+
+def add_state_cache_reset_control_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--no-reset-state-cache",
+        action="store_true",
+        help=(
+            "Keep session changes without resetting Codex state cache. Run reset-state-cache later."
+        ),
+    )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Do not prompt to retry when automatic Codex state cache reset is blocked.",
+    )
+
+
+def parse_reset_state_cache_args(
+    argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} reset-state-cache",
+        description="Back up and reset Codex state cache files.",
+    )
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=default_codex_home(),
+        help="Codex home directory. Defaults to CODEX_HOME or ~/.codex.",
     )
     return parser.parse_args(argv)
 
@@ -407,6 +441,8 @@ def parse_args(
             "  rename     rename a session_index.jsonl entry\n\n"
             "  import     import a bare rollout JSONL file\n\n"
             "  export     export sessions as rollout JSONL files\n\n"
+            "  reset-state-cache\n"
+            "             back up and reset Codex state cache files\n\n"
             "Markdown include presets:\n"
             "  dialogue   visible user/Codex messages, reasoning, progress messages\n"
             "  default    dialogue plus tool calls and tool outputs\n"

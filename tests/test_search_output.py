@@ -1,10 +1,9 @@
 import unittest
 from io import StringIO
 
+from codex_sessions.core.terminal import console_color_options, encode_for_output
 from codex_sessions.search.core import SearchLine
 from codex_sessions.search.output import (
-    console_color_options,
-    encode_for_output,
     text_with_highlights,
 )
 
@@ -22,7 +21,22 @@ class SearchOutputTests(unittest.TestCase):
         )
 
         self.assertEqual(rendered.plain, "Codex: hello needle")
-        self.assertIn("bright_red", str(rendered.spans[1].style))
+        self.assertTrue(any("bright_red" in str(span.style) for span in rendered.spans))
+
+    def test_text_with_highlights_uses_search_line_render_offsets(self) -> None:
+        rendered = text_with_highlights(
+            SearchLine(
+                text="Lead needle (+2 more)",
+                matches=((5, 11),),
+                occurrence_count=3,
+                prefix_length=5,
+                omission_note_start=12,
+            ),
+            "utf-8",
+        )
+
+        self.assertTrue(any("bright_blue" in str(span.style) for span in rendered.spans))
+        self.assertTrue(any("bright_black" in str(span.style) for span in rendered.spans))
 
     def test_console_color_options_respects_explicit_and_environment_flags(self) -> None:
         git_bash_env = {"TERM": "xterm-256color", "MSYSTEM": "MINGW64"}

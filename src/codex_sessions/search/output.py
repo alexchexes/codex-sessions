@@ -1,12 +1,11 @@
-import os
 import sys
-from collections.abc import Mapping, Sequence
-from typing import TextIO
+from collections.abc import Sequence
 
-from rich.console import Console
 from rich.text import Text
 
+from codex_sessions.core.terminal import encode_for_output, terminal_console
 from codex_sessions.search.core import SearchLine, SearchResult
+from codex_sessions.sessions.display import styled_session_display_text
 
 
 def text_spans_with_highlights(
@@ -28,96 +27,24 @@ def text_spans_with_highlights(
 
 
 def text_with_highlights(line: SearchLine, encoding: str | None) -> Text:
-    return text_spans_with_highlights(
+    rendered = text_spans_with_highlights(
         line.text,
         line.matches,
         encoding,
-        base_style="dim",
+        base_style="",
     )
-
-
-def env_flag_enabled(value: str | None) -> bool:
-    return value is not None and value != "" and value != "0"
-
-
-def auto_color_disabled(environ: Mapping[str, str]) -> bool:
-    return "NO_COLOR" in environ or environ.get("CLICOLOR") == "0"
-
-
-def auto_color_forced(environ: Mapping[str, str]) -> bool:
-    return env_flag_enabled(environ.get("FORCE_COLOR")) or env_flag_enabled(
-        environ.get("CLICOLOR_FORCE")
-    )
-
-
-def is_msys_terminal_environment(environ: Mapping[str, str]) -> bool:
-    term = environ.get("TERM")
-    if not term or term == "dumb":
-        return False
-    return any(
-        environ.get(name)
-        for name in (
-            "MSYSTEM",
-            "MINGW_CHOST",
-            "MINTTY_PID",
-            "TERM_PROGRAM",
-        )
-    )
-
-
-def is_windows_pipe_stream(stream: TextIO) -> bool:
-    if os.name != "nt":
-        return False
-    try:
-        import ctypes
-        import msvcrt
-
-        handle = msvcrt.get_osfhandle(stream.fileno())
-    except (AttributeError, OSError, ValueError):
-        return False
-    if handle == -1:
-        return False
-    file_type = ctypes.windll.kernel32.GetFileType(handle)
-    return bool(file_type == 0x0003)
-
-
-def console_color_options(
-    color: str,
-    stream: TextIO,
-    environ: Mapping[str, str] = os.environ,
-) -> tuple[bool | None, bool | None]:
-    if color == "always":
-        return True, False
-    if color == "never":
-        return False, True
-    if auto_color_disabled(environ):
-        return None, True
-    if auto_color_forced(environ):
-        return True, False
-    if is_msys_terminal_environment(environ) and is_windows_pipe_stream(stream):
-        return True, False
-    return None, False
+    if line.prefix_length:
+        rendered.stylize("bright_blue", 0, line.prefix_length)
+    if line.omission_note_start is not None:
+        rendered.stylize("bright_black", line.omission_note_start, len(line.text))
+    return rendered
 
 
 def render_search_results(
     results: Sequence[SearchResult], warnings: Sequence[str], color: str
 ) -> None:
-    stdout_force_terminal, stdout_no_color = console_color_options(color, sys.stdout)
-    stderr_force_terminal, stderr_no_color = console_color_options(color, sys.stderr)
-    console = Console(
-        file=sys.stdout,
-        force_terminal=stdout_force_terminal,
-        no_color=stdout_no_color,
-        highlight=False,
-        legacy_windows=False,
-    )
-    error_console = Console(
-        file=sys.stderr,
-        force_terminal=stderr_force_terminal,
-        no_color=stderr_no_color,
-        highlight=False,
-        legacy_windows=False,
-    )
+    console = terminal_console(sys.stdout, color=color)
+    error_console = terminal_console(sys.stderr, color=color)
 
     for warning in warnings:
         error_console.print(
@@ -131,18 +58,12 @@ def render_search_results(
     for result_index, result in enumerate(results):
         if result_index:
             console.print()
-        if result.session_info_matches:
-            session_info_text = text_spans_with_highlights(
-                result.session_info,
-                result.session_info_matches,
-                sys.stdout.encoding,
-                base_style="bold",
-            )
-        else:
-            session_info_text = Text(
-                encode_for_output(result.session_info, sys.stdout.encoding),
-                style="bold",
-            )
+        session_info_text = styled_session_display_text(
+            result.session,
+            sys.stdout.encoding,
+            title_style="bold bright_white",
+            title_matches=result.session_title_matches,
+        )
         console.print(session_info_text, soft_wrap=True)
         for line in result.lines:
             rendered_line = Text()
@@ -160,9 +81,3 @@ def render_search_results(
                 ),
                 soft_wrap=True,
             )
-
-
-def encode_for_output(text: str, encoding: str | None) -> str:
-    if not encoding:
-        return text
-    return text.encode(encoding, errors="backslashreplace").decode(encoding)

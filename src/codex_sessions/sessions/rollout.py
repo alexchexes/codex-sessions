@@ -42,6 +42,8 @@ class ImportSessionResult:
     plan: ImportSessionPlan
     session_index_backup_path: Path | None
     state_cache_backups: tuple[StateCacheBackup, ...]
+    state_cache_reset_error: str | None
+    state_cache_reset_skipped: bool
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,8 @@ class ImportSessionsResult:
     session_index_backup_path: Path | None
     rollout_backup_paths: tuple[Path, ...]
     state_cache_backups: tuple[StateCacheBackup, ...]
+    state_cache_reset_error: str | None
+    state_cache_reset_skipped: bool
 
 
 @dataclass(frozen=True)

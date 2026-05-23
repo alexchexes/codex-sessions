@@ -2,6 +2,8 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from codex_sessions.sessions.display import SessionDisplayInfo
+
 MAX_MATCHES_BEFORE_LINE_OMISSION = 2
 MAX_VISIBLE_MATCHES_PER_OMITTED_LINE = 1
 
@@ -24,12 +26,14 @@ class SearchLine:
     text: str
     matches: tuple[tuple[int, int], ...]
     occurrence_count: int
+    prefix_length: int = 0
+    omission_note_start: int | None = None
 
 
 @dataclass(frozen=True)
 class SearchResult:
-    session_info: str
-    session_info_matches: tuple[tuple[int, int], ...]
+    session: SessionDisplayInfo
+    session_title_matches: tuple[tuple[int, int], ...]
     lines: tuple[SearchLine, ...]
     omitted_occurrence_count: int
 
@@ -69,12 +73,16 @@ def make_search_line(
 ) -> SearchLine:
     width = max(20, line_width)
     occurrence_count = len(matches)
+    source_prefix_end = search_line_prefix_end(source_line)
     if len(source_line) <= width:
         return SearchLine(
-            text=source_line, matches=tuple(matches), occurrence_count=occurrence_count
+            text=source_line,
+            matches=tuple(matches),
+            occurrence_count=occurrence_count,
+            prefix_length=max(0, source_prefix_end),
         )
 
-    prefix_end = search_line_prefix_end(source_line)
+    prefix_end = source_prefix_end
     if prefix_end == -1 or any(start < prefix_end for start, _ in matches):
         prefix_end = 0
 
@@ -85,7 +93,11 @@ def make_search_line(
 
     content = source_line[prefix_end:]
     content_matches = tuple((start - prefix_end, end - prefix_end) for start, end in matches)
-    snippet, snippet_matches = compact_line_content(content, content_matches, width - len(prefix))
+    snippet, snippet_matches, omission_note_start = compact_line_content(
+        content,
+        content_matches,
+        width - len(prefix),
+    )
     adjusted_matches = tuple(
         (start + len(prefix), end + len(prefix)) for start, end in snippet_matches
     )
@@ -93,6 +105,10 @@ def make_search_line(
         text=f"{prefix}{snippet}",
         matches=adjusted_matches,
         occurrence_count=occurrence_count,
+        prefix_length=len(prefix),
+        omission_note_start=(
+            len(prefix) + omission_note_start if omission_note_start is not None else None
+        ),
     )
 
 
@@ -112,11 +128,12 @@ def compact_line_content(
     content: str,
     matches: Sequence[tuple[int, int]],
     width: int,
-) -> tuple[str, tuple[tuple[int, int], ...]]:
+) -> tuple[str, tuple[tuple[int, int], ...], int | None]:
     if len(content) <= width:
-        return content, tuple(matches)
+        return content, tuple(matches), None
     if len(matches) == 1:
-        return centered_match_snippet(content, matches[0], width)
+        snippet, snippet_matches = centered_match_snippet(content, matches[0], width)
+        return snippet, snippet_matches, None
     if len(matches) > MAX_MATCHES_BEFORE_LINE_OMISSION:
         return compact_line_with_omission_note(content, matches, width)
 
@@ -130,16 +147,17 @@ def compact_line_content(
         )
         snippet, snippet_matches = compose_compact_chunks(content, chunks, matches)
         if len(snippet) <= width:
-            return snippet, snippet_matches
+            return snippet, snippet_matches, None
 
-    return centered_match_snippet(content, matches[0], width)
+    snippet, snippet_matches = centered_match_snippet(content, matches[0], width)
+    return snippet, snippet_matches, None
 
 
 def compact_line_with_omission_note(
     content: str,
     matches: Sequence[tuple[int, int]],
     width: int,
-) -> tuple[str, tuple[tuple[int, int], ...]]:
+) -> tuple[str, tuple[tuple[int, int], ...], int]:
     visible_matches = tuple(matches[:MAX_VISIBLE_MATCHES_PER_OMITTED_LINE])
     omitted_count = len(matches) - len(visible_matches)
     note = f" ... (+{omitted_count} more on line)"
@@ -149,7 +167,7 @@ def compact_line_with_omission_note(
         available_width = max(1, width - len(note))
 
     snippet, snippet_matches = centered_match_snippet(content, visible_matches[0], available_width)
-    return f"{snippet}{note}", snippet_matches
+    return f"{snippet}{note}", snippet_matches, len(snippet)
 
 
 def compact_context_sizes(width: int) -> tuple[int, ...]:

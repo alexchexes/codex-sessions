@@ -1,12 +1,35 @@
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from codex_sessions.search.core import match_spans
+from rich.text import Text
+
+from codex_sessions.core.terminal import encode_for_output
 from codex_sessions.sessions.files import SessionFile
 from codex_sessions.sessions.index import SessionIndexEntry, normalize_session_id
 
 NO_ROLLOUT_FILE = "NO ROLLOUT FILE"
 NO_SESSION_INDEX_ENTRY = "NO ENTRY IN session_index.jsonl"
+
+SESSION_TIMESTAMP_STYLE = "bright_cyan"
+SESSION_TIMESTAMP_DETAIL_STYLE = "cyan"
+SESSION_SEPARATOR_STYLE = "bright_black"
+SESSION_ID_STYLE = "bright_black"
+SESSION_STATUS_STYLE = "bold bright_yellow"
+
+
+@dataclass(frozen=True)
+class SessionDisplayInfo:
+    session_id: str | None
+    title: str | None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    relative_path: str | None = None
+    status: str | None = None
+
+    @property
+    def identifier(self) -> str | None:
+        return self.session_id or self.relative_path
 
 
 def format_local_timestamp(value: datetime | None) -> str:
@@ -27,48 +50,101 @@ def local_timezone_offset_label(value: datetime | None) -> str:
     return f"UTC{sign}{hours:02d}:{minutes:02d}"
 
 
-def format_session_timestamps(session_file: SessionFile) -> str:
-    timezone_source = session_file.ended_at or session_file.started_at
-    if session_file.started_at is not None and session_file.ended_at is not None:
+def format_timestamp_range(started_at: datetime | None, ended_at: datetime | None) -> str:
+    timezone_source = ended_at or started_at
+    if started_at is not None and ended_at is not None:
         return (
-            f"{format_local_timestamp(session_file.started_at)} - "
-            f"{format_local_timestamp(session_file.ended_at)} "
+            f"{format_local_timestamp(started_at)} - "
+            f"{format_local_timestamp(ended_at)} "
             f"({local_timezone_offset_label(timezone_source)})"
         )
-    if session_file.started_at is not None:
+    if started_at is not None:
         return (
-            f"{format_local_timestamp(session_file.started_at)} "
-            f"({local_timezone_offset_label(timezone_source)})"
+            f"{format_local_timestamp(started_at)} ({local_timezone_offset_label(timezone_source)})"
         )
-    if session_file.ended_at is not None:
+    if ended_at is not None:
         return (
-            f"{format_local_timestamp(session_file.ended_at)} "
-            f"({local_timezone_offset_label(timezone_source)})"
+            f"{format_local_timestamp(ended_at)} ({local_timezone_offset_label(timezone_source)})"
         )
     return ""
 
 
-def format_indexed_session_line(entry: SessionIndexEntry, session_file: SessionFile) -> str:
+def format_session_timestamps(session_file: SessionFile) -> str:
+    return format_timestamp_range(session_file.started_at, session_file.ended_at)
+
+
+def format_session_display_info(info: SessionDisplayInfo) -> str:
     parts = []
-    timestamp_text = format_session_timestamps(session_file)
+    timestamp_text = format_timestamp_range(info.started_at, info.ended_at)
     if timestamp_text:
         parts.append(timestamp_text)
-    parts.extend([entry.session_id, entry.thread_name])
+    if info.identifier:
+        parts.append(info.identifier)
+    if info.title:
+        parts.append(info.title)
+    if info.status:
+        parts.append(info.status)
     return " - ".join(parts)
+
+
+def indexed_session_display_info(
+    entry: SessionIndexEntry,
+    session_file: SessionFile | None,
+) -> SessionDisplayInfo:
+    if session_file is None:
+        return SessionDisplayInfo(
+            session_id=entry.session_id,
+            title=entry.thread_name,
+            status=NO_ROLLOUT_FILE,
+        )
+    return SessionDisplayInfo(
+        session_id=entry.session_id,
+        title=entry.thread_name,
+        started_at=session_file.started_at,
+        ended_at=session_file.ended_at,
+        relative_path=session_file.relative_path,
+    )
+
+
+def unindexed_session_display_info(
+    session_file: SessionFile,
+    inferred_title: str | None,
+) -> SessionDisplayInfo:
+    if not inferred_title:
+        return SessionDisplayInfo(
+            session_id=None,
+            title=None,
+            relative_path=session_file.relative_path,
+            status=NO_SESSION_INDEX_ENTRY,
+        )
+    return SessionDisplayInfo(
+        session_id=session_file.session_id,
+        title=inferred_title,
+        started_at=session_file.started_at,
+        ended_at=session_file.ended_at,
+        relative_path=session_file.relative_path,
+        status=NO_SESSION_INDEX_ENTRY,
+    )
+
+
+def format_indexed_session_line(entry: SessionIndexEntry, session_file: SessionFile) -> str:
+    return format_session_display_info(indexed_session_display_info(entry, session_file))
 
 
 def format_unindexed_session_line(session_file: SessionFile, inferred_title: str | None) -> str:
-    if not inferred_title:
-        return f"{session_file.relative_path} - {NO_SESSION_INDEX_ENTRY}"
+    return format_session_display_info(unindexed_session_display_info(session_file, inferred_title))
 
-    parts = []
-    timestamp_text = format_session_timestamps(session_file)
-    if timestamp_text:
-        parts.append(timestamp_text)
-    parts.append(session_file.session_id or session_file.relative_path)
-    parts.append(inferred_title)
-    parts.append(NO_SESSION_INDEX_ENTRY)
-    return " - ".join(parts)
+
+def session_display_info_for_search(
+    session_file: SessionFile,
+    entries_by_id: dict[str, SessionIndexEntry],
+    inferred_title: str | None = None,
+) -> SessionDisplayInfo:
+    if session_file.session_id:
+        entry = entries_by_id.get(normalize_session_id(session_file.session_id))
+        if entry:
+            return indexed_session_display_info(entry, session_file)
+    return unindexed_session_display_info(session_file, inferred_title)
 
 
 def session_info_for_search(
@@ -76,11 +152,9 @@ def session_info_for_search(
     entries_by_id: dict[str, SessionIndexEntry],
     inferred_title: str | None = None,
 ) -> str:
-    if session_file.session_id:
-        entry = entries_by_id.get(normalize_session_id(session_file.session_id))
-        if entry:
-            return format_indexed_session_line(entry, session_file)
-    return format_unindexed_session_line(session_file, inferred_title)
+    return format_session_display_info(
+        session_display_info_for_search(session_file, entries_by_id, inferred_title)
+    )
 
 
 def session_title_for_search(
@@ -88,24 +162,99 @@ def session_title_for_search(
     entries_by_id: dict[str, SessionIndexEntry],
     inferred_title: str | None = None,
 ) -> str | None:
-    if session_file.session_id:
-        entry = entries_by_id.get(normalize_session_id(session_file.session_id))
-        if entry:
-            return entry.thread_name
-    return inferred_title
+    return session_display_info_for_search(session_file, entries_by_id, inferred_title).title
 
 
-def session_info_title_match_spans(
-    session_info: str,
-    title: str | None,
+def session_title_match_spans(
+    info: SessionDisplayInfo,
     search_pattern: re.Pattern[str],
 ) -> tuple[tuple[int, int], ...]:
-    if not title:
-        return ()
-    title_offset = session_info.rfind(title)
-    if title_offset == -1:
+    if not info.title:
         return ()
     return tuple(
-        (title_offset + start, title_offset + end)
-        for start, end in match_spans(title, search_pattern)
+        match.span()
+        for match in search_pattern.finditer(info.title)
+        if match.start() != match.end()
     )
+
+
+def append_encoded(text: Text, value: str, encoding: str | None, *, style: str = "") -> None:
+    text.append(encode_for_output(value, encoding), style=style)
+
+
+def append_session_separator(text: Text, encoding: str | None) -> None:
+    append_encoded(text, " - ", encoding, style=SESSION_SEPARATOR_STYLE)
+
+
+def append_timestamp_range(text: Text, info: SessionDisplayInfo, encoding: str | None) -> bool:
+    timezone_source = info.ended_at or info.started_at
+    if info.started_at is None and info.ended_at is None:
+        return False
+    if info.started_at is not None:
+        append_encoded(
+            text,
+            format_local_timestamp(info.started_at),
+            encoding,
+            style=SESSION_TIMESTAMP_STYLE,
+        )
+    if info.started_at is not None and info.ended_at is not None:
+        append_encoded(text, " - ", encoding, style=SESSION_TIMESTAMP_DETAIL_STYLE)
+    if info.ended_at is not None:
+        append_encoded(
+            text,
+            format_local_timestamp(info.ended_at),
+            encoding,
+            style=SESSION_TIMESTAMP_STYLE,
+        )
+    append_encoded(
+        text,
+        f" ({local_timezone_offset_label(timezone_source)})",
+        encoding,
+        style=SESSION_TIMESTAMP_DETAIL_STYLE,
+    )
+    return True
+
+
+def title_text(
+    title: str,
+    encoding: str | None,
+    *,
+    title_style: str,
+    match_spans: tuple[tuple[int, int], ...],
+) -> Text:
+    rendered = Text(encode_for_output(title, encoding), style=title_style)
+    for start, end in match_spans:
+        rendered.stylize("bold bright_red", start, end)
+    return rendered
+
+
+def styled_session_display_text(
+    info: SessionDisplayInfo,
+    encoding: str | None,
+    *,
+    title_style: str = "",
+    id_style: str = SESSION_ID_STYLE,
+    title_matches: tuple[tuple[int, int], ...] = (),
+) -> Text:
+    rendered = Text()
+    has_timestamp = append_timestamp_range(rendered, info, encoding)
+    if info.identifier:
+        if has_timestamp:
+            append_session_separator(rendered, encoding)
+        append_encoded(rendered, info.identifier, encoding, style=id_style)
+    if info.title:
+        if rendered:
+            append_session_separator(rendered, encoding)
+        rendered.append_text(
+            title_text(
+                info.title,
+                encoding,
+                title_style=title_style,
+                match_spans=title_matches,
+            )
+        )
+    if info.status:
+        if rendered:
+            append_session_separator(rendered, encoding)
+        append_encoded(rendered, info.status, encoding, style=SESSION_STATUS_STYLE)
+    return rendered

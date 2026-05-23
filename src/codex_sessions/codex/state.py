@@ -120,10 +120,20 @@ def reset_codex_state_cache(codex_home: Path, backup_dir: Path) -> tuple[StateCa
         except OSError as exc:
             restore_state_cache_backups(backups)
             raise CodexStateError(
-                f"Could not reset Codex state cache file {path}: {exc}. "
+                "Could not reset Codex state cache file:\n"
+                f"  {path}\n"
+                f"  {exc}\n"
                 "Close all Codex sessions and retry."
             ) from exc
         except CodexStateError:
             restore_state_cache_backups(backups)
             raise
     return tuple(backups)
+
+
+def reset_codex_state_cache_with_backup(codex_home: Path) -> tuple[StateCacheBackup, ...]:
+    backup_dir = backup_dir_for(codex_home, backup_label())
+    try:
+        return reset_codex_state_cache(codex_home, backup_dir)
+    finally:
+        remove_backup_dir_if_empty(backup_dir)

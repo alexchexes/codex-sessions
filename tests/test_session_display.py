@@ -5,12 +5,13 @@ from pathlib import Path
 
 from codex_sessions.sessions.display import (
     NO_SESSION_INDEX_ENTRY,
+    SessionDisplayInfo,
     format_indexed_session_line,
     format_session_timestamps,
     format_unindexed_session_line,
     session_info_for_search,
-    session_info_title_match_spans,
     session_title_for_search,
+    session_title_match_spans,
 )
 from codex_sessions.sessions.files import SessionFile
 from codex_sessions.sessions.index import SessionIndexEntry
@@ -104,18 +105,19 @@ class SessionDisplayTests(unittest.TestCase):
             "Indexed title",
         )
 
-    def test_session_info_title_match_spans_offsets_title_matches(self) -> None:
-        session_info = "2026-04-30 - aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa - Fix Search"
-
-        spans = session_info_title_match_spans(
-            session_info, "Fix Search", re.compile("search", re.I)
+    def test_session_title_match_spans_stay_relative_to_title(self) -> None:
+        session_info = SessionDisplayInfo(
+            session_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            title="Fix Search",
         )
 
-        expected_start = session_info.index("Search")
-        self.assertEqual(spans, ((expected_start, expected_start + len("Search")),))
-        self.assertEqual(session_info_title_match_spans(session_info, None, re.compile("x")), ())
+        spans = session_title_match_spans(session_info, re.compile("search", re.I))
+
+        self.assertEqual(spans, ((4, 10),))
         self.assertEqual(
-            session_info_title_match_spans(session_info, "Missing", re.compile("x")),
+            session_title_match_spans(
+                SessionDisplayInfo(session_id="id", title=None), re.compile("x")
+            ),
             (),
         )
 

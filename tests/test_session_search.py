@@ -140,7 +140,7 @@ class SessionSearchTests(unittest.TestCase):
         self.assertEqual(document.session_id, session_id)
         self.assertEqual(warnings, [])
         self.assertEqual(len(results), 1)
-        self.assertIn(session_id, results[0].session_info)
+        self.assertEqual(results[0].session.session_id, session_id)
         self.assertEqual(results[0].lines[0].text, "User: needle in message")
 
 

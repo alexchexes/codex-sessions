@@ -32,9 +32,8 @@ from codex_sessions.search.core import (
     search_matching_lines,
 )
 from codex_sessions.sessions.display import (
-    session_info_for_search,
-    session_info_title_match_spans,
-    session_title_for_search,
+    session_display_info_for_search,
+    session_title_match_spans,
 )
 from codex_sessions.sessions.documents import (
     SearchDocument,
@@ -347,14 +346,13 @@ def search_sessions(
             ended_at=document.ended_at,
         )
         inferred_title = infer_search_document_title(document)
-        session_info = session_info_for_search(session_file, entries_by_id, inferred_title)
-        title = session_title_for_search(session_file, entries_by_id, inferred_title)
-        session_info_matches = session_info_title_match_spans(session_info, title, search_pattern)
-        if lines or session_info_matches:
+        session = session_display_info_for_search(session_file, entries_by_id, inferred_title)
+        session_title_matches = session_title_match_spans(session, search_pattern)
+        if lines or session_title_matches:
             results.append(
                 SearchResult(
-                    session_info=session_info,
-                    session_info_matches=session_info_matches,
+                    session=session,
+                    session_title_matches=session_title_matches,
                     lines=lines,
                     omitted_occurrence_count=omitted_occurrence_count,
                 )
