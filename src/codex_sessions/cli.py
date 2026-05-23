@@ -39,6 +39,8 @@ from codex_sessions.search.sessions import (
 from codex_sessions.sessions.display import (
     NO_SESSION_INDEX_ENTRY,
     SessionDisplayInfo,
+    format_local_timestamp,
+    local_timezone_offset_label,
     styled_session_display_text,
 )
 from codex_sessions.sessions.index_workflows import (
@@ -58,9 +60,11 @@ from codex_sessions.sessions.rollout import (
     ExportSessionsPlan,
     ImportConflict,
     ImportDivergedConflict,
+    ImportDivergenceRecordPreview,
     ImportDuplicateSession,
     ImportFailure,
     ImportSessionPlan,
+    ImportSessionSide,
     ImportSessionsPlan,
     ImportSessionsResult,
     ImportSkippedHistory,
@@ -650,56 +654,124 @@ def format_import_skipped_lines(skipped: ImportSkippedSession) -> list[CliLine]:
 def format_import_history_skip_lines(skipped: ImportSkippedHistory, reason: str) -> list[CliLine]:
     return [
         cli_text(f"SKIPPED ({reason}) {skipped.session_id}", style=STYLE_LABEL),
-        *path_block_lines("Existing", skipped.existing_path, indent="  "),
-        *path_block_lines("Import", skipped.source_path, indent="  "),
         *labeled_lines(
             [
                 ("Common records", skipped.common_comparable_records),
-                ("Existing tail", skipped.existing_tail_comparable_records),
-                ("Import tail", skipped.incoming_tail_comparable_records),
             ],
             indent="  ",
         ),
+        *format_import_side_lines(
+            "Local",
+            skipped.existing_side,
+            tail_records=skipped.existing_tail_comparable_records,
+        ),
+        *format_import_side_lines(
+            "Import",
+            skipped.source_side,
+            tail_records=skipped.incoming_tail_comparable_records,
+        ),
     ]
+
+
+def import_side_display_info(side: ImportSessionSide) -> SessionDisplayInfo:
+    return SessionDisplayInfo(
+        session_id=side.session_id,
+        title=side.thread_name,
+        started_at=side.started_at,
+        ended_at=side.ended_at,
+    )
+
+
+def format_import_side_lines(
+    label: str,
+    side: ImportSessionSide,
+    *,
+    tail_records: int | None = None,
+) -> list[CliLine]:
+    heading = Text()
+    append_cli_text(heading, f"  {label}: ", sys.stdout.encoding, style=STYLE_LABEL)
+    heading.append_text(
+        styled_session_display_text(import_side_display_info(side), sys.stdout.encoding)
+    )
+    fields: list[tuple[str, object]] = [
+        ("File", side.path),
+        ("Fingerprint", format_fingerprint(side.fingerprint)),
+    ]
+    if tail_records is not None:
+        fields.insert(1, ("Tail records", tail_records))
+    return [
+        heading,
+        *path_block_lines("File", side.path, indent="    "),
+        *labeled_lines(fields[1:], indent="    "),
+    ]
+
+
+def format_divergence_record_preview_lines(
+    label: str,
+    preview: ImportDivergenceRecordPreview | None,
+) -> list[CliLine]:
+    if preview is None:
+        return []
+    timestamp = (
+        f", {format_local_timestamp(preview.timestamp)} "
+        f"({local_timezone_offset_label(preview.timestamp)})"
+        if preview.timestamp is not None
+        else ""
+    )
+    lines: list[CliLine] = [
+        cli_text(
+            f"    {label} first differing record: {preview.record_type}{timestamp}",
+            style=STYLE_LABEL,
+        )
+    ]
+    lines.extend(cli_text(f"      {line}") for line in preview.lines)
+    return lines
+
+
+def format_divergence_preview_lines(conflict: ImportDivergedConflict) -> list[CliLine]:
+    lines: list[CliLine] = [cli_text("  First differing records:", style=STYLE_HEADING)]
+    lines.extend(
+        format_divergence_record_preview_lines("Local", conflict.existing_divergence_preview)
+    )
+    lines.extend(
+        format_divergence_record_preview_lines("Import", conflict.source_divergence_preview)
+    )
+    return lines
 
 
 def format_import_conflict_lines(conflict: ImportConflict) -> list[CliLine]:
-    existing_fingerprint = (
-        format_fingerprint(conflict.existing_fingerprint)
-        if conflict.existing_fingerprint
-        else "UNKNOWN"
-    )
     return [
         cli_text(f"ID conflict {conflict.session_id}", style=STYLE_ATTENTION),
-        *path_block_lines("Local", conflict.existing_path, indent="  "),
-        *labeled_lines([("Existing fingerprint", existing_fingerprint)], indent="  "),
-        *path_block_lines("Import", conflict.source_path, indent="  "),
-        *labeled_lines(
-            [("Import fingerprint", format_fingerprint(conflict.source_fingerprint))],
-            indent="  ",
-        ),
+        *format_import_side_lines("Local", conflict.existing_side),
+        *format_import_side_lines("Import", conflict.source_side),
     ]
 
 
-def format_import_diverged_lines(conflict: ImportDivergedConflict) -> list[CliLine]:
-    return [
+def format_import_diverged_lines(
+    conflict: ImportDivergedConflict,
+    *,
+    show_divergence: bool = False,
+) -> list[CliLine]:
+    lines: list[CliLine] = [
         cli_text(f"Diverged {conflict.session_id}", style=STYLE_ATTENTION),
-        *path_block_lines("Local", conflict.existing_path, indent="  "),
         *labeled_lines(
-            [("Existing fingerprint", format_fingerprint(conflict.existing_fingerprint))],
+            [("Common records", conflict.common_comparable_records)],
             indent="  ",
         ),
-        *path_block_lines("Import", conflict.source_path, indent="  "),
-        *labeled_lines(
-            [
-                ("Import fingerprint", format_fingerprint(conflict.source_fingerprint)),
-                ("Common records", conflict.common_comparable_records),
-                ("Existing tail", conflict.existing_tail_comparable_records),
-                ("Import tail", conflict.incoming_tail_comparable_records),
-            ],
-            indent="  ",
+        *format_import_side_lines(
+            "Local",
+            conflict.existing_side,
+            tail_records=conflict.existing_tail_comparable_records,
+        ),
+        *format_import_side_lines(
+            "Import",
+            conflict.source_side,
+            tail_records=conflict.incoming_tail_comparable_records,
         ),
     ]
+    if show_divergence:
+        lines.extend(format_divergence_preview_lines(conflict))
+    return lines
 
 
 def format_import_duplicate_lines(duplicate: ImportDuplicateSession) -> list[CliLine]:
@@ -761,7 +833,11 @@ def import_plan_has_errors(plan: ImportSessionsPlan) -> bool:
     return bool(plan.duplicates or plan.conflicts or plan.diverged or plan.failures)
 
 
-def format_import_sessions_plan_lines(plan: ImportSessionsPlan) -> list[CliLine]:
+def format_import_sessions_plan_lines(
+    plan: ImportSessionsPlan,
+    *,
+    show_divergence: bool = False,
+) -> list[CliLine]:
     if (
         len(plan.import_plans) == 1
         and not plan.fast_forward_plans
@@ -845,7 +921,12 @@ def format_import_sessions_plan_lines(plan: ImportSessionsPlan) -> list[CliLine]
     if plan.diverged:
         lines.append(cli_text("Diverged conflicts:", style=STYLE_ATTENTION))
         for diverged_conflict in plan.diverged:
-            lines.extend(format_import_diverged_lines(diverged_conflict))
+            lines.extend(
+                format_import_diverged_lines(
+                    diverged_conflict,
+                    show_divergence=show_divergence,
+                )
+            )
     if plan.failures:
         lines.append(cli_text("Failed:", style=STYLE_ATTENTION))
         for failure in plan.failures:
@@ -921,7 +1002,11 @@ def print_import_result_summary(plan: ImportSessionsPlan) -> None:
         print_cli_line(count_text(prefix, count, style=style))
 
 
-def print_import_sessions_result(result: ImportSessionsResult) -> None:
+def print_import_sessions_result(
+    result: ImportSessionsResult,
+    *,
+    show_divergence: bool = False,
+) -> None:
     plan = result.plan
     if (
         len(plan.import_plans) == 1
@@ -972,7 +1057,12 @@ def print_import_sessions_result(result: ImportSessionsResult) -> None:
     if plan.diverged:
         print_cli_line("Diverged conflicts:", style=STYLE_ATTENTION)
         for diverged_conflict in plan.diverged:
-            print_cli_lines(format_import_diverged_lines(diverged_conflict))
+            print_cli_lines(
+                format_import_diverged_lines(
+                    diverged_conflict,
+                    show_divergence=show_divergence,
+                )
+            )
     if plan.failures:
         print_cli_line("Failed:", style=STYLE_ATTENTION)
         for failure in plan.failures:
@@ -1023,7 +1113,12 @@ def run_import_command(args: argparse.Namespace) -> int:
             )
         except (CliError, ValueError) as exc:
             raise SystemExit(str(exc)) from exc
-        print_cli_lines(format_import_sessions_plan_lines(plan))
+        print_cli_lines(
+            format_import_sessions_plan_lines(
+                plan,
+                show_divergence=args.show_divergence,
+            )
+        )
         return 1 if import_plan_has_errors(plan) else 0
 
     try:
@@ -1039,7 +1134,7 @@ def run_import_command(args: argparse.Namespace) -> int:
     except (CliError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 
-    print_import_sessions_result(result)
+    print_import_sessions_result(result, show_divergence=args.show_divergence)
     if result.plan.import_plans or result.plan.fast_forward_plans:
         print_mutation_state_cache_status(
             codex_home,

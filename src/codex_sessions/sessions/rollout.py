@@ -55,10 +55,29 @@ class ImportSkippedSession:
 
 
 @dataclass(frozen=True)
+class ImportSessionSide:
+    path: Path
+    session_id: str
+    thread_name: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    fingerprint: FileFingerprint
+
+
+@dataclass(frozen=True)
+class ImportDivergenceRecordPreview:
+    record_type: str
+    timestamp: datetime | None
+    lines: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ImportSkippedHistory:
     source_path: Path
     existing_path: Path
     session_id: str
+    source_side: ImportSessionSide
+    existing_side: ImportSessionSide
     common_comparable_records: int
     existing_tail_comparable_records: int
     incoming_tail_comparable_records: int
@@ -71,6 +90,8 @@ class ImportConflict:
     session_id: str
     source_fingerprint: FileFingerprint
     existing_fingerprint: FileFingerprint | None
+    source_side: ImportSessionSide
+    existing_side: ImportSessionSide
 
 
 @dataclass(frozen=True)
@@ -80,6 +101,10 @@ class ImportDivergedConflict:
     session_id: str
     source_fingerprint: FileFingerprint
     existing_fingerprint: FileFingerprint
+    source_side: ImportSessionSide
+    existing_side: ImportSessionSide
+    source_divergence_preview: ImportDivergenceRecordPreview | None
+    existing_divergence_preview: ImportDivergenceRecordPreview | None
     common_comparable_records: int
     existing_tail_comparable_records: int
     incoming_tail_comparable_records: int

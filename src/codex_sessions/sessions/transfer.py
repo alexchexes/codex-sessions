@@ -24,7 +24,7 @@ from codex_sessions.codex.state import (
 )
 from codex_sessions.core.timestamps import parse_timestamp
 from codex_sessions.errors import CliError
-from codex_sessions.search.sessions import build_search_document
+from codex_sessions.search.sessions import build_search_document, render_search_line_groups
 from codex_sessions.sessions.documents import SearchDocument, inferred_thread_name
 from codex_sessions.sessions.files import (
     SessionFile,
@@ -50,10 +50,12 @@ from codex_sessions.sessions.rollout import (
     FileFingerprint,
     ImportConflict,
     ImportDivergedConflict,
+    ImportDivergenceRecordPreview,
     ImportDuplicateSession,
     ImportFailure,
     ImportSessionPlan,
     ImportSessionResult,
+    ImportSessionSide,
     ImportSessionsPlan,
     ImportSessionsResult,
     ImportSkippedHistory,
@@ -77,6 +79,8 @@ from codex_sessions.sessions.rollout_history import (
 EXPORT_OUTPUT_FILE = "file"
 EXPORT_OUTPUT_DIRECTORY = "directory"
 EXPORT_OUTPUT_ZIP = "zip"
+MAX_DIVERGENCE_PREVIEW_LINES = 3
+MAX_DIVERGENCE_PREVIEW_LINE_CHARS = 180
 
 
 @dataclass(frozen=True)
@@ -127,13 +131,17 @@ class ImportRolloutConflict(CliError):
         existing_path: Path,
         session_id: str,
         source_fingerprint: FileFingerprint,
-        existing_fingerprint: FileFingerprint | None,
+        existing_fingerprint: FileFingerprint,
+        source_side: ImportSessionSide,
+        existing_side: ImportSessionSide,
     ) -> None:
         self.source_path = source_path
         self.existing_path = existing_path
         self.session_id = session_id
         self.source_fingerprint = source_fingerprint
         self.existing_fingerprint = existing_fingerprint
+        self.source_side = source_side
+        self.existing_side = existing_side
         existing_fingerprint_text = (
             format_fingerprint(existing_fingerprint) if existing_fingerprint else "UNKNOWN"
         )
@@ -142,6 +150,66 @@ class ImportRolloutConflict(CliError):
             f"Existing: {existing_path} ({existing_fingerprint_text}); "
             f"import: {source_path} ({format_fingerprint(source_fingerprint)})."
         )
+
+
+def import_session_side(
+    path: Path,
+    document: SearchDocument,
+    fingerprint: FileFingerprint,
+    *,
+    session_id: str,
+) -> ImportSessionSide:
+    return ImportSessionSide(
+        path=path,
+        session_id=session_id,
+        thread_name=document.thread_name or inferred_thread_name(document),
+        started_at=document.started_at,
+        ended_at=document.ended_at,
+        fingerprint=fingerprint,
+    )
+
+
+def compact_divergence_preview_line(line: str) -> str:
+    normalized = " ".join(line.split())
+    if len(normalized) <= MAX_DIVERGENCE_PREVIEW_LINE_CHARS:
+        return normalized
+    return f"{normalized[: MAX_DIVERGENCE_PREVIEW_LINE_CHARS - 3].rstrip()}..."
+
+
+def divergence_record_preview(
+    record: dict[str, Any] | None,
+) -> ImportDivergenceRecordPreview | None:
+    if record is None:
+        return None
+
+    rendered_groups = render_search_line_groups(record)
+    lines: list[str] = []
+    for preferred_group in ("visible", "tools", "metadata"):
+        for group, group_lines in rendered_groups:
+            if group == preferred_group:
+                lines.extend(group_lines)
+        if lines:
+            break
+
+    if not lines:
+        payload = record.get("payload")
+        payload_type = payload.get("type") if isinstance(payload, dict) else None
+        lines.append(
+            "record: "
+            + " / ".join(
+                str(value)
+                for value in (record.get("type"), payload_type)
+                if isinstance(value, str) and value
+            )
+        )
+
+    return ImportDivergenceRecordPreview(
+        record_type=str(record.get("type") or "record"),
+        timestamp=parse_timestamp(record.get("timestamp")),
+        lines=tuple(
+            compact_divergence_preview_line(line) for line in lines[:MAX_DIVERGENCE_PREVIEW_LINES]
+        ),
+    )
 
 
 def import_target_date(source_path: Path, document: SearchDocument) -> tuple[str, str, str]:
@@ -253,12 +321,29 @@ def plan_bare_rollout_import(
                 session_id=document.session_id,
                 fingerprint=source_fingerprint,
             )
+        if existing_rollout_fingerprint is None:
+            raise CliError(
+                f"Could not fingerprint existing Codex rollout file: {existing_rollout_path}"
+            )
+        existing_document = build_search_document(existing_rollout_path, "...")
         raise ImportRolloutConflict(
             source_path=expanded_source_path,
             existing_path=existing_rollout_path,
             session_id=document.session_id,
             source_fingerprint=source_fingerprint,
             existing_fingerprint=existing_rollout_fingerprint,
+            source_side=import_session_side(
+                expanded_source_path,
+                document,
+                source_fingerprint,
+                session_id=document.session_id,
+            ),
+            existing_side=import_session_side(
+                existing_rollout_path,
+                existing_document,
+                existing_rollout_fingerprint,
+                session_id=document.session_id,
+            ),
         )
 
     index_path = session_index_path or codex_home / "session_index.jsonl"
@@ -535,6 +620,8 @@ def import_history_skip(
         source_path=conflict.source_path,
         existing_path=conflict.existing_path,
         session_id=conflict.session_id,
+        source_side=conflict.source_side,
+        existing_side=conflict.existing_side,
         common_comparable_records=comparison.common_comparable_records,
         existing_tail_comparable_records=comparison.local_tail_comparable_records,
         incoming_tail_comparable_records=comparison.incoming_tail_comparable_records,
@@ -554,6 +641,10 @@ def import_diverged_conflict(
         session_id=conflict.session_id,
         source_fingerprint=conflict.source_fingerprint,
         existing_fingerprint=existing_fingerprint,
+        source_side=conflict.source_side,
+        existing_side=conflict.existing_side,
+        source_divergence_preview=divergence_record_preview(comparison.incoming_divergence_record),
+        existing_divergence_preview=divergence_record_preview(comparison.local_divergence_record),
         common_comparable_records=comparison.common_comparable_records,
         existing_tail_comparable_records=comparison.local_tail_comparable_records,
         incoming_tail_comparable_records=comparison.incoming_tail_comparable_records,
@@ -721,6 +812,8 @@ def plan_import_source_paths(
                     session_id=exc.session_id,
                     source_fingerprint=exc.source_fingerprint,
                     existing_fingerprint=exc.existing_fingerprint,
+                    source_side=exc.source_side,
+                    existing_side=exc.existing_side,
                 )
             outcomes.append(
                 ImportSourceOutcome(

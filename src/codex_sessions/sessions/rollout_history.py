@@ -23,6 +23,8 @@ class RolloutHistoryComparison:
     common_comparable_records: int | None
     local_tail_comparable_records: int
     incoming_tail_comparable_records: int
+    local_divergence_record: dict[str, Any] | None = None
+    incoming_divergence_record: dict[str, Any] | None = None
 
 
 def is_thread_name_updated_record(record: dict[str, Any]) -> bool:
@@ -109,6 +111,8 @@ def compare_comparable_rollout_histories(
                 incoming_tail_comparable_records=count_tail_records(
                     incoming_record, incoming_records
                 ),
+                local_divergence_record=local_record,
+                incoming_divergence_record=incoming_record,
             )
         common_records += 1
 

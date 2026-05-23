@@ -1920,16 +1920,20 @@ class CliTests(unittest.TestCase):
             write_jsonl(
                 source_path,
                 [
+                    import_title_record(
+                        session_id, "Incoming conflict title", "2026-04-30T18:20:38Z"
+                    ),
                     {
                         "timestamp": "2026-04-30T18:20:39Z",
                         "type": "session_meta",
                         "payload": {"id": session_id},
-                    }
+                    },
                 ],
             )
             write_jsonl(
                 target_path,
                 [
+                    import_title_record(session_id, "Local conflict title", "2026-04-30T18:20:38Z"),
                     {
                         "timestamp": "2026-04-30T18:20:39Z",
                         "type": "session_meta",
@@ -1953,6 +1957,10 @@ class CliTests(unittest.TestCase):
             self.assertIn("ID conflict", output)
             self.assertIn("Local:", output)
             self.assertIn("Import:", output)
+            self.assertIn("Local conflict title", output)
+            self.assertIn("Incoming conflict title", output)
+            self.assertIn("File:", output)
+            self.assertIn("Fingerprint:", output)
             self.assertIn("sha256", output)
 
     def test_import_merge_fast_forwards_existing_rollout_and_reports_title_update(self) -> None:
@@ -2151,9 +2159,59 @@ class CliTests(unittest.TestCase):
             self.assertEqual(result, 1)
             self.assertIn("Diverged conflicts: 1", output)
             self.assertIn(f"Diverged {session_id}", output)
-            self.assertIn("Common records:     1", output)
+            self.assertIn("Common records: 1", output)
+            self.assertIn("Local:", output)
+            self.assertIn("Import:", output)
+            self.assertIn("Tail records: 1", output)
+            self.assertIn("local", output)
+            self.assertIn("incoming", output)
+            self.assertNotIn("First differing records:", output)
             self.assertEqual(read_jsonl(target_path), local_records)
             self.assertFalse((codex_home / "session_index.jsonl").exists())
+
+    def test_import_merge_can_preview_first_divergence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            session_id = "58585858-6868-6868-6868-686868686868"
+            filename = f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            source_path = source_dir / filename
+            target_path = codex_home / "sessions" / "2026" / "04" / "30" / filename
+            target_path.parent.mkdir(parents=True)
+            common_records = [{"type": "session_meta", "payload": {"id": session_id}}]
+            local_records = [
+                *common_records,
+                import_user_message("local branch message", "2026-04-30T18:21:39Z"),
+            ]
+            incoming_records = [
+                *common_records,
+                import_user_message("incoming branch message", "2026-04-30T18:21:39Z"),
+            ]
+            write_jsonl(target_path, local_records)
+            write_jsonl(source_path, incoming_records)
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(
+                    [
+                        "import",
+                        "--merge",
+                        "--show-divergence",
+                        "--codex-home",
+                        str(codex_home),
+                        str(source_path),
+                    ]
+                )
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 1)
+            self.assertIn("First differing records:", output)
+            self.assertIn("Local first differing record: response_item", output)
+            self.assertIn("Import first differing record: response_item", output)
+            self.assertIn("User: local branch message", output)
+            self.assertIn("User: incoming branch message", output)
 
     def test_import_merge_keeps_fast_forward_when_state_reset_is_deferred(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

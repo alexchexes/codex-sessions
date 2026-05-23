@@ -268,6 +268,11 @@ def parse_import_args(
         action="store_true",
         help="Fast-forward existing sessions when imported rollout history is safely ahead.",
     )
+    parser.add_argument(
+        "--show-divergence",
+        action="store_true",
+        help="Show a compact preview of the first differing records for diverged imports.",
+    )
     add_state_cache_reset_control_args(parser)
     parser.add_argument(
         "--name",

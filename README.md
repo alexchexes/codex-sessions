@@ -254,7 +254,9 @@ other safe sessions from the same bulk import are still imported. With
 `--merge`, imports also
 fast-forward local rollouts when their comparable history is a prefix of the
 incoming rollout. Equivalent histories and locally ahead histories are skipped;
-diverged histories are reported and left untouched.
+diverged histories are reported and left untouched. Add `--show-divergence` to
+include a compact preview of the first differing records for each diverged
+session.
 
 Commands that change Codex sessions try to reset the state cache after writing
 their rollout or `session_index.jsonl` changes. If the root `state_*.sqlite*`

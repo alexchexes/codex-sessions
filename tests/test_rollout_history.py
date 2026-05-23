@@ -103,6 +103,14 @@ class RolloutHistoryTests(unittest.TestCase):
         self.assertEqual(comparison.common_comparable_records, 2)
         self.assertEqual(comparison.local_tail_comparable_records, 1)
         self.assertEqual(comparison.incoming_tail_comparable_records, 1)
+        self.assertEqual(
+            comparison.local_divergence_record,
+            message_record("local tail"),
+        )
+        self.assertEqual(
+            comparison.incoming_divergence_record,
+            message_record("incoming tail"),
+        )
 
     def test_changed_non_title_record_shape_diverges_even_with_same_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
