@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -2871,6 +2872,105 @@ class CliTests(unittest.TestCase):
             self.assertEqual(cached_paths, {str(local_path.resolve())})
             self.assertTrue(all("nested" not in path for path in cached_paths))
 
+    def test_import_directory_uses_manifest_fingerprint_for_incoming_rollout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            session_id = "53535353-6565-6565-6565-656565656565"
+            filename = f"2026-04-30--Manifest-import--{session_id}.jsonl"
+            source_path = source_dir / filename
+            records = [
+                import_title_record(session_id, "Manifest import", "2026-04-30T18:20:38Z"),
+                import_user_message("incoming", "2026-04-30T18:20:39Z"),
+            ]
+            write_jsonl(source_path, records)
+            source_bytes = source_path.read_bytes()
+            (source_dir / "codex-sessions-manifest-v1.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "rollouts": [
+                            {
+                                "path": filename,
+                                "session_id": session_id,
+                                "thread_name": "Manifest import",
+                                "started_at": "2026-04-30T18:20:38+00:00",
+                                "updated_at": "2026-04-30T18:20:39+00:00",
+                                "size": len(source_bytes),
+                                "sha256": hashlib.sha256(source_bytes).hexdigest(),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "codex_sessions.sessions.transfer.file_fingerprint",
+                side_effect=AssertionError("source manifest fingerprint should be reused"),
+            ):
+                with redirect_stdout(StringIO()):
+                    result = main(["import", "--codex-home", str(codex_home), str(source_dir)])
+
+            self.assertEqual(result, 0)
+            self.assertEqual(read_jsonl(codex_home / "session_index.jsonl")[0]["id"], session_id)
+
+    def test_import_malformed_manifest_warns_and_falls_back_to_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            session_id = "53535353-6666-6666-6666-666666666666"
+            source_path = source_dir / f"2026-04-30--Bad-manifest--{session_id}.jsonl"
+            write_jsonl(
+                source_path,
+                [import_title_record(session_id, "Bad manifest import", "2026-04-30T18:20:38Z")],
+            )
+            (source_dir / "codex-sessions-manifest-v1.json").write_text(
+                "{not valid json",
+                encoding="utf-8",
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_dir)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("Warnings:", output)
+            self.assertIn("Could not use export manifest", output)
+            self.assertIn("Falling back to hashing", output)
+            self.assertEqual(read_jsonl(codex_home / "session_index.jsonl")[0]["id"], session_id)
+
+    def test_import_zip_malformed_manifest_warns_and_falls_back_to_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_zip = root / "incoming.zip"
+            session_id = "53535353-6767-6767-6767-676767676767"
+            records = [
+                import_title_record(session_id, "Zip bad manifest import", "2026-04-30T18:20:38Z")
+            ]
+            with zipfile.ZipFile(source_zip, "w") as archive:
+                archive.writestr("codex-sessions-manifest-v1.json", "{not valid json")
+                archive.writestr(
+                    f"2026-04-30--Zip-bad-manifest--{session_id}.jsonl",
+                    "\n".join(json.dumps(record) for record in records) + "\n",
+                )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_zip)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("Warnings:", output)
+            self.assertIn("Could not use export manifest", output)
+            self.assertEqual(read_jsonl(codex_home / "session_index.jsonl")[0]["id"], session_id)
+
     def test_export_by_id_writes_readable_file_with_index_title_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -3428,12 +3528,30 @@ class CliTests(unittest.TestCase):
             output = buffer.getvalue()
             first_output = output_dir / f"2026-04-30--First-bulk-export--{first_id}.jsonl"
             second_output = output_dir / f"2026-04-30--Second-bulk-export--{second_id}.jsonl"
+            manifest_path = output_dir / "codex-sessions-manifest-v1.json"
             self.assertEqual(result, 0)
             self.assertIn("Exported sessions: 2", output)
             self.assertNotIn(first_id, output)
             self.assertNotIn(second_id, output)
             self.assertTrue(first_output.exists())
             self.assertTrue(second_output.exists())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_rollouts = manifest["rollouts"]
+            self.assertEqual(manifest["version"], 1)
+            self.assertEqual(
+                [entry["path"] for entry in manifest_rollouts],
+                [first_output.name, second_output.name],
+            )
+            self.assertEqual(
+                [entry["session_id"] for entry in manifest_rollouts],
+                [first_id, second_id],
+            )
+            self.assertEqual(
+                [entry["thread_name"] for entry in manifest_rollouts],
+                ["First bulk export", "Second bulk export"],
+            )
+            self.assertEqual(manifest_rollouts[0]["size"], first_output.stat().st_size)
+            self.assertEqual(len(manifest_rollouts[0]["sha256"]), 64)
             self.assertEqual(
                 read_jsonl(first_output)[0]["payload"]["thread_name"], "First bulk export"
             )
@@ -3584,15 +3702,20 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(result, 0)
             with zipfile.ZipFile(output_zip) as archive:
+                rollout_member = f"2026-04-30--Zip-export-title--{session_id}.jsonl"
                 self.assertEqual(
-                    archive.namelist(),
-                    [f"2026-04-30--Zip-export-title--{session_id}.jsonl"],
+                    archive.namelist(), [rollout_member, "codex-sessions-manifest-v1.json"]
                 )
                 exported_records = [
                     json.loads(line)
-                    for line in archive.read(archive.namelist()[0]).decode("utf-8").splitlines()
+                    for line in archive.read(rollout_member).decode("utf-8").splitlines()
                 ]
+                manifest = json.loads(
+                    archive.read("codex-sessions-manifest-v1.json").decode("utf-8")
+                )
             self.assertEqual(exported_records[0]["payload"]["thread_name"], "Zip export title")
+            self.assertEqual(manifest["rollouts"][0]["path"], rollout_member)
+            self.assertEqual(manifest["rollouts"][0]["session_id"], session_id)
 
     def test_export_then_import_round_trips_title_and_rollout(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

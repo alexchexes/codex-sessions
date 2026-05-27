@@ -800,6 +800,13 @@ def format_import_failure_lines(failure: ImportFailure) -> list[CliLine]:
     ]
 
 
+def format_import_warning_lines(warning: str) -> list[CliLine]:
+    return [
+        cli_text("WARNING", style=STYLE_ATTENTION),
+        *indented_text_lines(warning, indent="  "),
+    ]
+
+
 def import_title_update_plans(plan: ImportSessionsPlan) -> tuple[ImportSessionPlan, ...]:
     return tuple(
         import_plan
@@ -850,6 +857,7 @@ def format_import_sessions_plan_lines(
         and not plan.conflicts
         and not plan.diverged
         and not plan.failures
+        and not plan.warnings
     ):
         return format_import_plan_lines(plan.import_plans[0])
 
@@ -864,6 +872,10 @@ def format_import_sessions_plan_lines(
         count_text("Diverged conflicts: ", len(plan.diverged), style=STYLE_ATTENTION),
         count_text("Failed: ", len(plan.failures), style=STYLE_ERROR),
     ]
+    if plan.warnings:
+        lines.append(cli_text("Warnings:", style=STYLE_ATTENTION))
+        for warning in plan.warnings:
+            lines.extend(format_import_warning_lines(warning))
     if plan.import_plans:
         lines.append(cli_text("Would import sessions:", style=STYLE_HEADING))
         for import_plan in plan.import_plans:
@@ -989,7 +1001,7 @@ def print_import_plan_rows(
 
 def print_import_result_summary(plan: ImportSessionsPlan) -> None:
     print_cli_line("Summary:", style=STYLE_HEADING)
-    summary_lines = (
+    summary_lines: tuple[tuple[str, int, str], ...] = (
         ("Sessions added: ", len(plan.import_plans), STYLE_SUCCESS),
         ("Fast-forwarded: ", len(plan.fast_forward_plans), STYLE_SUCCESS),
         ("Skipped (identical): ", len(plan.skipped), STYLE_LABEL),
@@ -1000,6 +1012,8 @@ def print_import_result_summary(plan: ImportSessionsPlan) -> None:
         ("Diverged conflicts: ", len(plan.diverged), STYLE_ATTENTION),
         ("Failed: ", len(plan.failures), STYLE_ERROR),
     )
+    if plan.warnings:
+        summary_lines = (*summary_lines, ("Warnings: ", len(plan.warnings), STYLE_ATTENTION))
     for prefix, count, style in summary_lines:
         print_cli_line(count_text(prefix, count, style=style))
 
@@ -1020,10 +1034,15 @@ def print_import_sessions_result(
         and not plan.conflicts
         and not plan.diverged
         and not plan.failures
+        and not plan.warnings
     ):
         print_single_import_result(result)
         return
 
+    if plan.warnings:
+        print_cli_line("Warnings:", style=STYLE_ATTENTION)
+        for warning in plan.warnings:
+            print_cli_lines(format_import_warning_lines(warning))
     print_import_plan_rows(
         "Added sessions:",
         "Added: ",

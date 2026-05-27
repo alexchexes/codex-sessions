@@ -133,6 +133,7 @@ class ImportSessionsPlan:
     conflicts: tuple[ImportConflict, ...]
     diverged: tuple[ImportDivergedConflict, ...]
     failures: tuple[ImportFailure, ...]
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

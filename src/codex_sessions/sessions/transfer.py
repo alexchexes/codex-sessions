@@ -2,7 +2,7 @@ import json
 import shutil
 import tempfile
 import zipfile
-from collections.abc import Generator, Iterable, Sequence
+from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -48,6 +48,16 @@ from codex_sessions.sessions.index import (
     session_index_record_thread_name,
     session_index_records,
     write_session_index_records,
+)
+from codex_sessions.sessions.manifest import (
+    MANIFEST_FILENAME,
+    ExportManifestEntry,
+    ImportManifestEntry,
+    export_manifest_bytes,
+    file_fingerprint_from_bytes,
+    manifest_path_key,
+    read_directory_manifest,
+    read_zip_manifest,
 )
 from codex_sessions.sessions.rollout import (
     ExportSessionPlan,
@@ -109,6 +119,13 @@ class ImportSourceOutcome:
         | ImportConflict
         | ImportDivergedConflict
     )
+
+
+@dataclass(frozen=True)
+class ImportSourceBundle:
+    paths: tuple[Path, ...]
+    source_fingerprints: Mapping[Path, FileFingerprint]
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass
@@ -177,6 +194,17 @@ def local_rollout_fingerprint(path: Path, cache: LocalFingerprintCache | None) -
     fingerprint, _, updated = file_fingerprint_from_session_cache(path, cache.entries)
     cache.dirty = cache.dirty or updated
     return fingerprint
+
+
+def source_rollout_fingerprint(
+    path: Path,
+    source_fingerprints: Mapping[Path, FileFingerprint] | None,
+) -> FileFingerprint:
+    if source_fingerprints is not None:
+        fingerprint = source_fingerprints.get(path)
+        if fingerprint is not None:
+            return fingerprint
+    return file_fingerprint(path)
 
 
 def write_local_fingerprint_cache(cache: LocalFingerprintCache | None) -> None:
@@ -334,6 +362,7 @@ def plan_bare_rollout_import(
     *,
     name: str | None = None,
     local_fingerprint_cache: LocalFingerprintCache | None = None,
+    source_fingerprints: Mapping[Path, FileFingerprint] | None = None,
 ) -> ImportSessionPlan:
     expanded_source_path = source_path.expanduser().resolve()
     if not expanded_source_path.exists():
@@ -347,7 +376,7 @@ def plan_bare_rollout_import(
         raise CliError(f"Cannot infer session id from rollout: {source_path}")
 
     target_path = import_target_path(expanded_source_path, resolved_sessions_dir, document)
-    source_fingerprint = file_fingerprint(expanded_source_path)
+    source_fingerprint = source_rollout_fingerprint(expanded_source_path, source_fingerprints)
     existing_files = existing_session_files_for_id(document.session_id, resolved_sessions_dir)
     existing_rollout_path = first_existing_rollout_for_import(existing_files, target_path)
     existing_rollout_fingerprint = (
@@ -617,10 +646,54 @@ def zip_member_output_path(temp_dir: Path, index: int, member_name: str) -> Path
     return temp_dir / f"{index:05d}" / name
 
 
-def extract_zip_rollout_sources(zip_path: Path, temp_dir: Path) -> list[Path]:
+def manifest_fingerprints_for_paths(
+    paths_by_manifest_key: Mapping[str, Path],
+    manifest_entries: Mapping[str, ImportManifestEntry],
+) -> tuple[dict[Path, FileFingerprint], tuple[str, ...]]:
+    source_fingerprints: dict[Path, FileFingerprint] = {}
+    warnings: list[str] = []
+    for manifest_key, path in paths_by_manifest_key.items():
+        entry = manifest_entries.get(manifest_key)
+        if entry is None:
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            warnings.append(f"Could not stat manifest file {path}: {exc}. Falling back to hashing.")
+            continue
+        if size != entry.fingerprint.size:
+            warnings.append(
+                f"Ignored export manifest fingerprint for {manifest_key}: "
+                f"manifest size {entry.fingerprint.size} bytes, file size {size} bytes."
+            )
+            continue
+        source_fingerprints[path.resolve()] = entry.fingerprint
+    return source_fingerprints, tuple(warnings)
+
+
+def directory_import_source_bundle(source_dir: Path) -> ImportSourceBundle:
+    paths = tuple(sorted(path for path in source_dir.rglob("*.jsonl") if path.is_file()))
+    manifest_entries, manifest_warnings = read_directory_manifest(source_dir)
+    paths_by_manifest_key = {
+        manifest_path_key(path.relative_to(source_dir)): path for path in paths
+    }
+    source_fingerprints, fingerprint_warnings = manifest_fingerprints_for_paths(
+        paths_by_manifest_key,
+        manifest_entries,
+    )
+    return ImportSourceBundle(
+        paths=paths,
+        source_fingerprints=source_fingerprints,
+        warnings=(*manifest_warnings, *fingerprint_warnings),
+    )
+
+
+def extract_zip_rollout_sources(zip_path: Path, temp_dir: Path) -> ImportSourceBundle:
     try:
         with zipfile.ZipFile(zip_path) as archive:
+            manifest_entries, manifest_warnings = read_zip_manifest(archive, zip_path)
             paths = []
+            paths_by_manifest_key: dict[str, Path] = {}
             for index, member in enumerate(archive.infolist(), start=1):
                 if member.is_dir() or not member.filename.lower().endswith(".jsonl"):
                     continue
@@ -628,35 +701,42 @@ def extract_zip_rollout_sources(zip_path: Path, temp_dir: Path) -> list[Path]:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_bytes(archive.read(member))
                 paths.append(output_path)
+                paths_by_manifest_key[manifest_path_key(member.filename)] = output_path
     except zipfile.BadZipFile as exc:
         raise CliError(f"Import zip is not a valid zip archive: {zip_path}") from exc
-    return paths
+    source_fingerprints, fingerprint_warnings = manifest_fingerprints_for_paths(
+        paths_by_manifest_key,
+        manifest_entries,
+    )
+    return ImportSourceBundle(
+        paths=tuple(paths),
+        source_fingerprints=source_fingerprints,
+        warnings=(*manifest_warnings, *fingerprint_warnings),
+    )
 
 
 @contextmanager
-def import_rollout_source_paths(source_path: Path) -> Generator[tuple[Path, ...]]:
+def import_rollout_source_bundle(source_path: Path) -> Generator[ImportSourceBundle]:
     expanded_source_path = source_path.expanduser().resolve()
     if not expanded_source_path.exists():
         raise CliError(f"Input file not found: {source_path}")
     if expanded_source_path.is_dir():
-        paths = tuple(
-            sorted(path for path in expanded_source_path.rglob("*.jsonl") if path.is_file())
-        )
-        if not paths:
+        bundle = directory_import_source_bundle(expanded_source_path)
+        if not bundle.paths:
             raise CliError(f"No rollout JSONL files found in import directory: {source_path}")
-        yield paths
+        yield bundle
         return
     if not expanded_source_path.is_file():
         raise CliError(f"Input path is not a file or directory: {source_path}")
     if expanded_source_path.suffix.lower() != ".zip":
-        yield (expanded_source_path,)
+        yield ImportSourceBundle(paths=(expanded_source_path,), source_fingerprints={})
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        paths = tuple(extract_zip_rollout_sources(expanded_source_path, Path(tmpdir)))
-        if not paths:
+        bundle = extract_zip_rollout_sources(expanded_source_path, Path(tmpdir))
+        if not bundle.paths:
             raise CliError(f"No rollout JSONL files found in import zip: {source_path}")
-        yield paths
+        yield bundle
 
 
 def import_history_skip(
@@ -808,6 +888,8 @@ def plan_import_source_paths(
     name: str | None = None,
     merge: bool = False,
     persist_local_fingerprint_cache: bool = True,
+    source_fingerprints: Mapping[Path, FileFingerprint] | None = None,
+    warnings: Sequence[str] = (),
 ) -> ImportSessionsPlan:
     if name is not None and len(source_paths) != 1:
         raise CliError("--name can only be used when importing one rollout file.")
@@ -824,6 +906,7 @@ def plan_import_source_paths(
                 sessions_dir=sessions_dir,
                 name=name,
                 local_fingerprint_cache=local_fingerprint_cache,
+                source_fingerprints=source_fingerprints,
             )
             outcomes.append(
                 ImportSourceOutcome(
@@ -899,6 +982,7 @@ def plan_import_source_paths(
         conflicts=tuple(conflicts),
         diverged=tuple(diverged),
         failures=tuple(failures),
+        warnings=tuple(warnings),
     )
 
 
@@ -912,15 +996,17 @@ def plan_sessions_import(
     merge: bool = False,
     persist_local_fingerprint_cache: bool = True,
 ) -> ImportSessionsPlan:
-    with import_rollout_source_paths(source_path) as source_paths:
+    with import_rollout_source_bundle(source_path) as source_bundle:
         return plan_import_source_paths(
-            source_paths=source_paths,
+            source_paths=source_bundle.paths,
             codex_home=codex_home,
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
             name=name,
             merge=merge,
             persist_local_fingerprint_cache=persist_local_fingerprint_cache,
+            source_fingerprints=source_bundle.source_fingerprints,
+            warnings=source_bundle.warnings,
         )
 
 
@@ -1007,15 +1093,17 @@ def import_sessions(
     merge: bool = False,
     reset_state_cache: bool = True,
 ) -> ImportSessionsResult:
-    with import_rollout_source_paths(source_path) as source_paths:
+    with import_rollout_source_bundle(source_path) as source_bundle:
         plan = plan_import_source_paths(
-            source_paths=source_paths,
+            source_paths=source_bundle.paths,
             codex_home=codex_home,
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
             name=name,
             merge=merge,
             persist_local_fingerprint_cache=True,
+            source_fingerprints=source_bundle.source_fingerprints,
+            warnings=source_bundle.warnings,
         )
         selected_plans = (*plan.import_plans, *plan.fast_forward_plans)
         if not selected_plans:
@@ -1527,6 +1615,21 @@ def export_plan_jsonl_bytes(plan: ExportSessionPlan) -> bytes:
     return plan.source_path.read_bytes()
 
 
+def export_manifest_entry(
+    plan: ExportSessionPlan,
+    relative_path: str,
+    fingerprint: FileFingerprint,
+) -> ExportManifestEntry:
+    return ExportManifestEntry(
+        relative_path=manifest_path_key(relative_path),
+        session_id=plan.session_id,
+        thread_name=plan.thread_name,
+        started_at=plan.started_at,
+        updated_at=plan.ended_at or plan.started_at,
+        fingerprint=fingerprint,
+    )
+
+
 def write_export_plan_to_file(plan: ExportSessionPlan) -> None:
     plan.output_path.parent.mkdir(parents=True, exist_ok=True)
     if plan.rollout_will_be_rewritten:
@@ -1538,6 +1641,33 @@ def write_export_plan_to_file(plan: ExportSessionPlan) -> None:
         shutil.copy2(plan.source_path, plan.output_path)
 
 
+def write_export_manifest_to_directory(plan: ExportSessionsPlan) -> None:
+    if plan.output_path is None:
+        raise CliError("Directory export requires an output path.")
+    output_dir = plan.output_path.expanduser()
+    entries = []
+    for session_plan in plan.session_plans:
+        relative_path = session_plan.output_path.relative_to(output_dir).as_posix()
+        entries.append(
+            export_manifest_entry(
+                session_plan,
+                relative_path,
+                file_fingerprint(session_plan.output_path),
+            )
+        )
+    manifest_path = output_dir / MANIFEST_FILENAME
+    temp_path = temp_path_for(manifest_path)
+    try:
+        temp_path.write_bytes(export_manifest_bytes(entries))
+        temp_path.replace(manifest_path)
+    except OSError:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def write_export_plan_to_zip(plan: ExportSessionsPlan) -> None:
     if plan.output_path is None:
         raise CliError("Zip export requires an output path.")
@@ -1545,11 +1675,21 @@ def write_export_plan_to_zip(plan: ExportSessionsPlan) -> None:
     temp_path = temp_path_for(plan.output_path)
     try:
         with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            manifest_entries = []
             for session_plan in plan.session_plans:
+                data = export_plan_jsonl_bytes(session_plan)
                 archive.writestr(
                     session_plan.output_path.as_posix(),
-                    export_plan_jsonl_bytes(session_plan),
+                    data,
                 )
+                manifest_entries.append(
+                    export_manifest_entry(
+                        session_plan,
+                        session_plan.output_path.as_posix(),
+                        file_fingerprint_from_bytes(data),
+                    )
+                )
+            archive.writestr(MANIFEST_FILENAME, export_manifest_bytes(manifest_entries))
         temp_path.replace(plan.output_path)
     except OSError:
         try:
@@ -1595,4 +1735,6 @@ def export_sessions(
     else:
         for session_plan in plan.session_plans:
             write_export_plan_to_file(session_plan)
+        if plan.output_kind == EXPORT_OUTPUT_DIRECTORY:
+            write_export_manifest_to_directory(plan)
     return ExportSessionsResult(plan=plan)
