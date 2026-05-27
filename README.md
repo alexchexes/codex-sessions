@@ -314,11 +314,10 @@ color for timestamps, section headings, secondary paths, and attention states.
 auto-detection. Standard `NO_COLOR`, `CLICOLOR=0`, `FORCE_COLOR`, and
 `CLICOLOR_FORCE` environment flags apply to auto-detected CLI colors.
 
-Search caches extracted searchable text under
-`~/.codex/cache/codex-sessions/search-v3.json` and invalidates entries when the
-source rollout file size or modification time changes. Use `--rebuild-cache` to
-refresh cached entries, or `--no-cache` for a one-off uncached search.
-`list` uses the same cache for rollout metadata and inferred titles.
+Search caches extracted searchable text and session metadata for speed. Use
+`--rebuild-cache` to refresh cached entries, or `--no-cache` for a one-off
+uncached search. `list` uses the same cache for rollout metadata and inferred
+titles.
 
 ## Codex Skill
 

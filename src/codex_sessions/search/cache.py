@@ -4,7 +4,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from codex_sessions.core.timestamps import parse_timestamp
+from codex_sessions.sessions.cache import (
+    cached_session_metadata,
+    session_cache_entry_from_document,
+    session_cache_key,
+)
 from codex_sessions.sessions.documents import SearchDocument
 
 SEARCH_CACHE_VERSION = 3
@@ -16,7 +20,7 @@ def search_cache_path(codex_home: Path) -> Path:
 
 
 def search_cache_key(path: Path) -> str:
-    return os.path.normcase(str(path.resolve()))
+    return session_cache_key(path)
 
 
 def read_search_cache(cache_path: Path) -> dict[str, Any]:
@@ -54,11 +58,8 @@ def cached_search_document(
 ) -> SearchDocument | None:
     if not isinstance(entry, dict):
         return None
-    if entry.get("path") != str(path.resolve()):
-        return None
-    if entry.get("size") != stat_result.st_size:
-        return None
-    if entry.get("mtime_ns") != stat_result.st_mtime_ns:
+    metadata = cached_session_metadata(entry, path, stat_result)
+    if metadata is None:
         return None
     if entry.get("redaction") != redaction:
         return None
@@ -69,18 +70,11 @@ def cached_search_document(
     if visible_lines is None or metadata_lines is None or tool_lines is None:
         return None
 
-    session_id = entry.get("session_id")
-    if session_id is not None and not isinstance(session_id, str):
-        return None
-    thread_name = entry.get("thread_name")
-    if thread_name is not None and not isinstance(thread_name, str):
-        return None
-
     return SearchDocument(
-        session_id=session_id,
-        thread_name=thread_name,
-        started_at=parse_timestamp(entry.get("started_at")),
-        ended_at=parse_timestamp(entry.get("ended_at")),
+        session_id=metadata.session_id,
+        thread_name=metadata.thread_name,
+        started_at=metadata.started_at,
+        ended_at=metadata.ended_at,
         visible_lines=visible_lines,
         metadata_lines=metadata_lines,
         tool_lines=tool_lines,
@@ -99,14 +93,8 @@ def search_cache_entry(
     path: Path, stat_result: os.stat_result, document: SearchDocument, redaction: str
 ) -> dict[str, Any]:
     return {
-        "path": str(path.resolve()),
-        "size": stat_result.st_size,
-        "mtime_ns": stat_result.st_mtime_ns,
+        **session_cache_entry_from_document(path, stat_result, document),
         "redaction": redaction,
-        "session_id": document.session_id,
-        "thread_name": document.thread_name,
-        "started_at": document.started_at.isoformat() if document.started_at else None,
-        "ended_at": document.ended_at.isoformat() if document.ended_at else None,
         "visible_lines": list(document.visible_lines),
         "metadata_lines": list(document.metadata_lines),
         "tool_lines": list(document.tool_lines),

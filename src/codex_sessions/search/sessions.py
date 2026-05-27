@@ -31,6 +31,15 @@ from codex_sessions.search.core import (
     compile_search_pattern,
     search_matching_lines,
 )
+from codex_sessions.sessions.cache import (
+    cached_session_metadata,
+    prune_missing_session_cache_entries,
+    read_session_cache,
+    session_cache_entry_from_document,
+    session_cache_key,
+    session_cache_path,
+    write_session_cache,
+)
 from codex_sessions.sessions.display import (
     session_display_info_for_search,
     session_title_match_spans,
@@ -262,7 +271,10 @@ def load_search_documents(
     session_paths = discover_session_paths(sessions_dir)
     cache_path = search_cache_path(codex_home)
     cache_entries = read_search_cache(cache_path) if use_cache else None
+    metadata_cache_path = session_cache_path(codex_home)
+    metadata_cache_entries = read_session_cache(metadata_cache_path) if use_cache else None
     cache_dirty = False
+    metadata_cache_dirty = False
     documents: list[tuple[Path, SearchDocument]] = []
     warnings: list[str] = []
 
@@ -279,6 +291,20 @@ def load_search_documents(
                     session_path, stat_result, document, redaction
                 )
                 cache_dirty = True
+            if metadata_cache_entries is not None:
+                metadata_cache_key = session_cache_key(session_path)
+                cached_metadata = (
+                    None
+                    if rebuild_cache
+                    else cached_session_metadata(
+                        metadata_cache_entries.get(metadata_cache_key), session_path, stat_result
+                    )
+                )
+                if cached_metadata is None:
+                    metadata_cache_entries[metadata_cache_key] = session_cache_entry_from_document(
+                        session_path, stat_result, document
+                    )
+                    metadata_cache_dirty = True
             documents.append((session_path, document))
         except (OSError, ValueError) as exc:
             relative_path = format_session_file_path(session_path, sessions_dir)
@@ -286,6 +312,9 @@ def load_search_documents(
             if cache_entries is not None:
                 cache_entries.pop(search_cache_key(session_path), None)
                 cache_dirty = True
+            if metadata_cache_entries is not None:
+                metadata_cache_entries.pop(session_cache_key(session_path), None)
+                metadata_cache_dirty = True
 
     if cache_entries is not None:
         cache_dirty = prune_missing_search_cache_entries(cache_entries) or cache_dirty
@@ -294,6 +323,15 @@ def load_search_documents(
                 write_search_cache(cache_path, cache_entries)
             except OSError as exc:
                 warnings.append(f"Could not write search cache {cache_path}: {exc}")
+    if metadata_cache_entries is not None:
+        metadata_cache_dirty = (
+            prune_missing_session_cache_entries(metadata_cache_entries) or metadata_cache_dirty
+        )
+        if metadata_cache_dirty:
+            try:
+                write_session_cache(metadata_cache_path, metadata_cache_entries)
+            except OSError as exc:
+                warnings.append(f"Could not write session cache {metadata_cache_path}: {exc}")
 
     return documents, warnings
 

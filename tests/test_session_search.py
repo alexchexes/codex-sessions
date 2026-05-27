@@ -13,6 +13,7 @@ from codex_sessions.search.sessions import (
     search_document_lines,
     search_sessions,
 )
+from codex_sessions.sessions.cache import read_session_cache, session_cache_key, session_cache_path
 from codex_sessions.sessions.documents import SearchDocument
 
 
@@ -136,12 +137,17 @@ class SessionSearchTests(unittest.TestCase):
 
             document = build_search_document(rollout, "...")
             results, warnings = search_sessions(codex_home, search_options())
+            metadata_cache = read_session_cache(session_cache_path(codex_home))
 
         self.assertEqual(document.session_id, session_id)
         self.assertEqual(warnings, [])
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].session.session_id, session_id)
         self.assertEqual(results[0].lines[0].text, "User: needle in message")
+        self.assertEqual(
+            metadata_cache[session_cache_key(rollout)]["session_id"],
+            session_id,
+        )
 
 
 if __name__ == "__main__":
