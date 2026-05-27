@@ -77,6 +77,8 @@ from codex_sessions.sessions.rollout import (
     ImportSessionsResult,
     ImportSkippedHistory,
     ImportSkippedSession,
+    SyncSessionsPlan,
+    SyncSessionsResult,
     export_title_slug,
     file_fingerprint,
     format_fingerprint,
@@ -1730,11 +1732,207 @@ def export_sessions(
         updated_before=updated_before,
         force=force,
     )
+    return write_export_sessions_plan(plan)
+
+
+def write_export_sessions_plan(plan: ExportSessionsPlan) -> ExportSessionsResult:
     if plan.output_kind == EXPORT_OUTPUT_ZIP:
         write_export_plan_to_zip(plan)
     else:
         for session_plan in plan.session_plans:
             write_export_plan_to_file(session_plan)
-        if plan.output_kind == EXPORT_OUTPUT_DIRECTORY:
+        if plan.output_kind == EXPORT_OUTPUT_DIRECTORY and plan.session_plans:
             write_export_manifest_to_directory(plan)
     return ExportSessionsResult(plan=plan)
+
+
+def empty_import_sessions_plan(warnings: Sequence[str] = ()) -> ImportSessionsPlan:
+    return ImportSessionsPlan(
+        import_plans=(),
+        fast_forward_plans=(),
+        skipped=(),
+        skipped_equivalent=(),
+        skipped_local_ahead=(),
+        duplicates=(),
+        conflicts=(),
+        diverged=(),
+        failures=(),
+        warnings=tuple(warnings),
+    )
+
+
+def import_plan_session_ids(plan: ImportSessionsPlan) -> set[str]:
+    session_ids: set[str] = set()
+    for import_plan in (*plan.import_plans, *plan.fast_forward_plans):
+        session_ids.add(normalize_session_id(import_plan.session_id))
+    for skipped in plan.skipped:
+        session_ids.add(normalize_session_id(skipped.session_id))
+    for skipped_history in (*plan.skipped_equivalent, *plan.skipped_local_ahead):
+        session_ids.add(normalize_session_id(skipped_history.session_id))
+    for duplicate in plan.duplicates:
+        session_ids.add(normalize_session_id(duplicate.session_id))
+    for conflict in plan.conflicts:
+        session_ids.add(normalize_session_id(conflict.session_id))
+    for diverged in plan.diverged:
+        session_ids.add(normalize_session_id(diverged.session_id))
+    return session_ids
+
+
+def plan_missing_sessions_export_to_directory(
+    *,
+    codex_home: Path,
+    output: Path,
+    excluded_session_ids: set[str],
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+) -> ExportSessionsPlan:
+    resolved_sessions_dir = sessions_dir or codex_home / "sessions"
+    output_path = output.expanduser()
+    if not resolved_sessions_dir.exists():
+        return ExportSessionsPlan(
+            session_plans=(),
+            output_kind=EXPORT_OUTPUT_DIRECTORY,
+            output_path=output_path,
+            force=False,
+            filtered_out_count=0,
+        )
+
+    index_path = session_index_path or codex_home / "session_index.jsonl"
+    candidates = export_session_candidates(
+        codex_home=codex_home,
+        session_index_path=index_path,
+        sessions_dir=resolved_sessions_dir,
+    )
+    selected_candidates = [
+        candidate
+        for candidate in candidates
+        if normalize_session_id(candidate.session_id) not in excluded_session_ids
+    ]
+    plans = tuple(
+        export_plan_for_candidate(
+            candidate,
+            export_output_path_for_candidate(candidate, output_path, EXPORT_OUTPUT_DIRECTORY),
+            force=False,
+            check_output_file=True,
+        )
+        for candidate in selected_candidates
+    )
+    return ExportSessionsPlan(
+        session_plans=plans,
+        output_kind=EXPORT_OUTPUT_DIRECTORY,
+        output_path=output_path,
+        force=False,
+        filtered_out_count=len(candidates) - len(selected_candidates),
+    )
+
+
+def plan_sync_import(
+    sync_dir: Path,
+    codex_home: Path,
+    session_index_path: Path | None,
+    sessions_dir: Path | None,
+    *,
+    merge: bool,
+    persist_local_fingerprint_cache: bool,
+) -> ImportSessionsPlan:
+    if not sync_dir.exists():
+        return empty_import_sessions_plan()
+    if not sync_dir.is_dir():
+        raise CliError(f"Sync path is not a directory: {sync_dir}")
+    try:
+        return plan_sessions_import(
+            source_path=sync_dir,
+            codex_home=codex_home,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+            merge=merge,
+            persist_local_fingerprint_cache=persist_local_fingerprint_cache,
+        )
+    except CliError as exc:
+        if str(exc).startswith("No rollout JSONL files found in import directory:"):
+            _, manifest_warnings = read_directory_manifest(sync_dir)
+            return empty_import_sessions_plan(manifest_warnings)
+        raise
+
+
+def plan_sessions_sync(
+    sync_dir: Path,
+    codex_home: Path,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    *,
+    merge: bool = False,
+    persist_local_fingerprint_cache: bool = True,
+) -> SyncSessionsPlan:
+    resolved_sync_dir = sync_dir.expanduser().resolve()
+    import_plan = plan_sync_import(
+        resolved_sync_dir,
+        codex_home,
+        session_index_path,
+        sessions_dir,
+        merge=merge,
+        persist_local_fingerprint_cache=persist_local_fingerprint_cache,
+    )
+    export_plan = plan_missing_sessions_export_to_directory(
+        codex_home=codex_home,
+        output=resolved_sync_dir,
+        excluded_session_ids=import_plan_session_ids(import_plan),
+        session_index_path=session_index_path,
+        sessions_dir=sessions_dir,
+    )
+    return SyncSessionsPlan(
+        sync_dir=resolved_sync_dir,
+        import_plan=import_plan,
+        export_plan=export_plan,
+    )
+
+
+def sync_sessions(
+    sync_dir: Path,
+    codex_home: Path,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+    *,
+    merge: bool = False,
+    reset_state_cache: bool = True,
+) -> SyncSessionsResult:
+    plan = plan_sessions_sync(
+        sync_dir=sync_dir,
+        codex_home=codex_home,
+        session_index_path=session_index_path,
+        sessions_dir=sessions_dir,
+        merge=merge,
+        persist_local_fingerprint_cache=False,
+    )
+    import_result = None
+    if plan.import_plan.import_plans or plan.import_plan.fast_forward_plans:
+        import_result = import_sessions(
+            source_path=plan.sync_dir,
+            codex_home=codex_home,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+            merge=merge,
+            reset_state_cache=reset_state_cache,
+        )
+    else:
+        import_result = ImportSessionsResult(
+            plan=plan.import_plan,
+            session_index_backup_path=None,
+            rollout_backup_paths=(),
+            state_cache_backups=(),
+            state_cache_reset_error=None,
+            state_cache_reset_skipped=False,
+        )
+
+    if plan.export_plan.session_plans:
+        plan.sync_dir.mkdir(parents=True, exist_ok=True)
+    export_result = write_export_sessions_plan(plan.export_plan)
+    return SyncSessionsResult(
+        plan=SyncSessionsPlan(
+            sync_dir=plan.sync_dir,
+            import_plan=import_result.plan,
+            export_plan=export_result.plan,
+        ),
+        import_result=import_result,
+        export_result=export_result,
+    )

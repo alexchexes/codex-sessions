@@ -177,6 +177,20 @@ class ExportSessionsResult:
     plan: ExportSessionsPlan
 
 
+@dataclass(frozen=True)
+class SyncSessionsPlan:
+    sync_dir: Path
+    import_plan: ImportSessionsPlan
+    export_plan: ExportSessionsPlan
+
+
+@dataclass(frozen=True)
+class SyncSessionsResult:
+    plan: SyncSessionsPlan
+    import_result: ImportSessionsResult | None
+    export_result: ExportSessionsResult
+
+
 def file_fingerprint(path: Path) -> FileFingerprint:
     digest = hashlib.sha256()
     with path.open("rb") as src:

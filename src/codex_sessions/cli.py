@@ -20,6 +20,7 @@ from codex_sessions.cli_args import (
     parse_repair_index_args,
     parse_reset_state_cache_args,
     parse_search_args,
+    parse_sync_args,
     resolve_markdown_tool_mode,
 )
 from codex_sessions.codex.state import (
@@ -69,6 +70,8 @@ from codex_sessions.sessions.rollout import (
     ImportSessionsResult,
     ImportSkippedHistory,
     ImportSkippedSession,
+    SyncSessionsPlan,
+    SyncSessionsResult,
     format_fingerprint,
 )
 from codex_sessions.sessions.transfer import (
@@ -78,6 +81,8 @@ from codex_sessions.sessions.transfer import (
     import_sessions,
     plan_sessions_export,
     plan_sessions_import,
+    plan_sessions_sync,
+    sync_sessions,
 )
 
 __version__ = "0.1.0"
@@ -842,6 +847,23 @@ def import_plan_has_errors(plan: ImportSessionsPlan) -> bool:
     return bool(plan.duplicates or plan.conflicts or plan.diverged or plan.failures)
 
 
+def import_plan_has_output(plan: ImportSessionsPlan) -> bool:
+    return any(
+        (
+            plan.import_plans,
+            plan.fast_forward_plans,
+            plan.skipped,
+            plan.skipped_equivalent,
+            plan.skipped_local_ahead,
+            plan.duplicates,
+            plan.conflicts,
+            plan.diverged,
+            plan.failures,
+            plan.warnings,
+        )
+    )
+
+
 def format_import_sessions_plan_lines(
     plan: ImportSessionsPlan,
     *,
@@ -947,6 +969,65 @@ def format_import_sessions_plan_lines(
             lines.extend(format_import_failure_lines(failure))
     append_import_title_update_lines(lines, plan, "would update")
     return lines
+
+
+def format_sync_export_plan_lines(plan: ExportSessionsPlan) -> list[CliLine]:
+    lines: list[CliLine] = [
+        count_text(
+            "Would export local-only sessions: ",
+            len(plan.session_plans),
+            style=STYLE_LABEL,
+        )
+    ]
+    if plan.filtered_out_count:
+        lines.append(
+            count_text(
+                "Already in sync folder: ",
+                plan.filtered_out_count,
+                style=STYLE_SECONDARY,
+            )
+        )
+    lines.extend(path_block_lines("Sync folder", plan.output_path))
+    if not plan.session_plans:
+        lines.append(cli_text("No local-only sessions to export.", style=STYLE_SECONDARY))
+        return lines
+
+    lines.append(cli_text("Would export local-only sessions:", style=STYLE_HEADING))
+    for session_plan in plan.session_plans:
+        lines.append(
+            prefixed_session_info_text(
+                "- ",
+                session_display_info(
+                    session_plan.session_id,
+                    session_plan.thread_name,
+                    session_plan.started_at,
+                    session_plan.ended_at,
+                ),
+                prefix_style=STYLE_SECONDARY,
+            )
+        )
+        lines.append(path_arrow_text(session_plan.output_path))
+    return lines
+
+
+def format_sync_plan_lines(
+    plan: SyncSessionsPlan,
+    *,
+    show_divergence: bool = False,
+) -> list[CliLine]:
+    return [
+        cli_text("Sync folder:", style=STYLE_HEADING),
+        *path_block_lines("Path", plan.sync_dir, indent="  "),
+        cli_text(""),
+        cli_text("Download from sync folder:", style=STYLE_HEADING),
+        *format_import_sessions_plan_lines(
+            plan.import_plan,
+            show_divergence=show_divergence,
+        ),
+        cli_text(""),
+        cli_text("Upload to sync folder:", style=STYLE_HEADING),
+        *format_sync_export_plan_lines(plan.export_plan),
+    ]
 
 
 def print_single_import_result(result: ImportSessionsResult) -> None:
@@ -1168,6 +1249,104 @@ def run_import_command(args: argparse.Namespace) -> int:
     return 1 if import_plan_has_errors(result.plan) else 0
 
 
+def print_sync_export_result(plan: ExportSessionsPlan) -> None:
+    print_cli_line(
+        count_text(
+            "Exported local-only sessions: ",
+            len(plan.session_plans),
+            style=STYLE_SUCCESS,
+        )
+    )
+    if plan.filtered_out_count:
+        print_cli_line(
+            count_text(
+                "Already in sync folder: ",
+                plan.filtered_out_count,
+                style=STYLE_SECONDARY,
+            )
+        )
+    print_encoded_lines(path_block_lines("Sync folder", plan.output_path))
+
+
+def print_sync_sessions_result(
+    result: SyncSessionsResult,
+    codex_home: Path,
+    *,
+    show_divergence: bool = False,
+    non_interactive: bool = False,
+) -> None:
+    print_cli_line("Sync folder:", style=STYLE_HEADING)
+    print_encoded_lines(path_block_lines("Path", result.plan.sync_dir, indent="  "))
+    if import_plan_has_output(result.plan.import_plan):
+        print_cli_line()
+        print_cli_line("Download from sync folder:", style=STYLE_HEADING)
+        if result.import_result is not None:
+            print_import_sessions_result(result.import_result, show_divergence=show_divergence)
+            if result.plan.import_plan.import_plans or result.plan.import_plan.fast_forward_plans:
+                print_mutation_state_cache_status(
+                    codex_home,
+                    result.import_result.state_cache_backups,
+                    result.import_result.state_cache_reset_error,
+                    result.import_result.state_cache_reset_skipped,
+                    non_interactive=non_interactive,
+                )
+    else:
+        print_cli_line()
+        print_cli_line("Download from sync folder:", style=STYLE_HEADING)
+        print_cli_line("No sync-folder sessions to import.", style=STYLE_SECONDARY)
+
+    print_cli_line()
+    print_cli_line("Upload to sync folder:", style=STYLE_HEADING)
+    print_sync_export_result(result.plan.export_plan)
+
+
+def run_sync_command(args: argparse.Namespace) -> int:
+    codex_home = args.codex_home.expanduser().resolve()
+    session_index_path = (
+        args.session_index.expanduser().resolve()
+        if args.session_index
+        else codex_home / "session_index.jsonl"
+    )
+    sessions_dir = (
+        args.sessions_dir.expanduser().resolve() if args.sessions_dir else codex_home / "sessions"
+    )
+
+    if args.dry_run:
+        try:
+            plan = plan_sessions_sync(
+                sync_dir=args.sync_dir,
+                codex_home=codex_home,
+                session_index_path=session_index_path,
+                sessions_dir=sessions_dir,
+                merge=args.merge,
+                persist_local_fingerprint_cache=False,
+            )
+        except (CliError, ValueError) as exc:
+            raise SystemExit(str(exc)) from exc
+        print_cli_lines(format_sync_plan_lines(plan, show_divergence=args.show_divergence))
+        return 1 if import_plan_has_errors(plan.import_plan) else 0
+
+    try:
+        result = sync_sessions(
+            sync_dir=args.sync_dir,
+            codex_home=codex_home,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+            merge=args.merge,
+            reset_state_cache=not args.no_reset_state_cache,
+        )
+    except (CliError, ValueError, OSError) as exc:
+        raise SystemExit(str(exc)) from exc
+
+    print_sync_sessions_result(
+        result,
+        codex_home,
+        show_divergence=args.show_divergence,
+        non_interactive=args.non_interactive,
+    )
+    return 1 if import_plan_has_errors(result.plan.import_plan) else 0
+
+
 def export_rollout_action_label(plan: ExportSessionPlan) -> str:
     if plan.rollout_will_be_rewritten:
         return "copy with rollout title event update"
@@ -1355,6 +1534,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_import_command(parse_import_args(raw_argv[1:], prog))
     if raw_argv[:1] == ["export"]:
         return run_export_command(parse_export_args(raw_argv[1:], prog))
+    if raw_argv[:1] == ["sync"]:
+        return run_sync_command(parse_sync_args(raw_argv[1:], prog))
     if raw_argv[:1] == ["reset-state-cache"]:
         return run_reset_state_cache_command(parse_reset_state_cache_args(raw_argv[1:], prog))
 

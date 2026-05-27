@@ -330,6 +330,53 @@ def parse_reset_state_cache_args(
     return parser.parse_args(argv)
 
 
+def parse_sync_args(
+    argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} sync",
+        description="Synchronize Codex sessions through a local folder.",
+    )
+    parser.add_argument(
+        "sync_dir",
+        type=Path,
+        help="Local folder used as the shared sync store.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show the sync plan without modifying Codex home or the sync folder.",
+    )
+    parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="Fast-forward local sessions when sync-folder rollout history is safely ahead.",
+    )
+    parser.add_argument(
+        "--show-divergence",
+        action="store_true",
+        help="Show a compact preview of the first differing records for diverged imports.",
+    )
+    add_state_cache_reset_control_args(parser)
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=default_codex_home(),
+        help="Codex home directory. Defaults to CODEX_HOME or ~/.codex.",
+    )
+    parser.add_argument(
+        "--session-index",
+        type=Path,
+        help="Path to session_index.jsonl. Defaults to <codex-home>/session_index.jsonl.",
+    )
+    parser.add_argument(
+        "--sessions-dir",
+        type=Path,
+        help="Path to Codex sessions directory. Defaults to <codex-home>/sessions.",
+    )
+    return parser.parse_args(argv)
+
+
 def parse_export_args(
     argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
 ) -> argparse.Namespace:
@@ -446,6 +493,7 @@ def parse_args(
             "  rename     rename a session_index.jsonl entry\n\n"
             "  import     import a bare rollout JSONL file\n\n"
             "  export     export sessions as rollout JSONL files\n\n"
+            "  sync       synchronize sessions through a local folder\n\n"
             "  reset-state-cache\n"
             "             back up and reset Codex state cache files\n\n"
             "Markdown include presets:\n"
