@@ -25,6 +25,13 @@ from codex_sessions.codex.state import (
 from codex_sessions.core.timestamps import parse_timestamp
 from codex_sessions.errors import CliError
 from codex_sessions.search.sessions import build_search_document, render_search_line_groups
+from codex_sessions.sessions.cache import (
+    file_fingerprint_from_session_cache,
+    prune_missing_session_cache_entries,
+    read_session_cache,
+    session_cache_path,
+    write_session_cache,
+)
 from codex_sessions.sessions.documents import SearchDocument, inferred_thread_name
 from codex_sessions.sessions.files import (
     SessionFile,
@@ -104,6 +111,13 @@ class ImportSourceOutcome:
     )
 
 
+@dataclass
+class LocalFingerprintCache:
+    cache_path: Path
+    entries: dict[str, Any]
+    dirty: bool = False
+
+
 class ImportSkippedIdentical(CliError):
     def __init__(
         self,
@@ -150,6 +164,30 @@ class ImportRolloutConflict(CliError):
             f"Existing: {existing_path} ({existing_fingerprint_text}); "
             f"import: {source_path} ({format_fingerprint(source_fingerprint)})."
         )
+
+
+def load_local_fingerprint_cache(codex_home: Path) -> LocalFingerprintCache:
+    cache_path = session_cache_path(codex_home)
+    return LocalFingerprintCache(cache_path=cache_path, entries=read_session_cache(cache_path))
+
+
+def local_rollout_fingerprint(path: Path, cache: LocalFingerprintCache | None) -> FileFingerprint:
+    if cache is None:
+        return file_fingerprint(path)
+    fingerprint, _, updated = file_fingerprint_from_session_cache(path, cache.entries)
+    cache.dirty = cache.dirty or updated
+    return fingerprint
+
+
+def write_local_fingerprint_cache(cache: LocalFingerprintCache | None) -> None:
+    if cache is None or not cache.dirty:
+        return
+    prune_missing_session_cache_entries(cache.entries)
+    try:
+        write_session_cache(cache.cache_path, cache.entries)
+    except OSError:
+        # Fingerprint cache writes are an optimization; import planning must stay functional.
+        return
 
 
 def import_session_side(
@@ -295,6 +333,7 @@ def plan_bare_rollout_import(
     sessions_dir: Path | None = None,
     *,
     name: str | None = None,
+    local_fingerprint_cache: LocalFingerprintCache | None = None,
 ) -> ImportSessionPlan:
     expanded_source_path = source_path.expanduser().resolve()
     if not expanded_source_path.exists():
@@ -312,7 +351,9 @@ def plan_bare_rollout_import(
     existing_files = existing_session_files_for_id(document.session_id, resolved_sessions_dir)
     existing_rollout_path = first_existing_rollout_for_import(existing_files, target_path)
     existing_rollout_fingerprint = (
-        file_fingerprint(existing_rollout_path) if existing_rollout_path is not None else None
+        local_rollout_fingerprint(existing_rollout_path, local_fingerprint_cache)
+        if existing_rollout_path is not None
+        else None
     )
 
     if existing_rollout_path is not None:
@@ -507,13 +548,16 @@ def import_bare_rollout(
     name: str | None = None,
     reset_state_cache: bool = True,
 ) -> ImportSessionResult:
+    local_fingerprint_cache = load_local_fingerprint_cache(codex_home)
     plan = plan_bare_rollout_import(
         source_path=source_path,
         codex_home=codex_home,
         session_index_path=session_index_path,
         sessions_dir=sessions_dir,
         name=name,
+        local_fingerprint_cache=local_fingerprint_cache,
     )
+    write_local_fingerprint_cache(local_fingerprint_cache)
     index_changed = plan.index_action in {"add", "update"}
     updated_index_records = session_index_records_for_import(plan) if index_changed else None
 
@@ -763,10 +807,12 @@ def plan_import_source_paths(
     *,
     name: str | None = None,
     merge: bool = False,
+    persist_local_fingerprint_cache: bool = True,
 ) -> ImportSessionsPlan:
     if name is not None and len(source_paths) != 1:
         raise CliError("--name can only be used when importing one rollout file.")
 
+    local_fingerprint_cache = load_local_fingerprint_cache(codex_home)
     outcomes: list[ImportSourceOutcome] = []
     failures: list[ImportFailure] = []
     for source_path in source_paths:
@@ -777,6 +823,7 @@ def plan_import_source_paths(
                 session_index_path=session_index_path,
                 sessions_dir=sessions_dir,
                 name=name,
+                local_fingerprint_cache=local_fingerprint_cache,
             )
             outcomes.append(
                 ImportSourceOutcome(
@@ -840,6 +887,8 @@ def plan_import_source_paths(
         conflicts,
         diverged,
     ) = split_import_outcomes(outcomes)
+    if persist_local_fingerprint_cache:
+        write_local_fingerprint_cache(local_fingerprint_cache)
     return ImportSessionsPlan(
         import_plans=tuple(import_plans),
         fast_forward_plans=tuple(fast_forward_plans),
@@ -861,6 +910,7 @@ def plan_sessions_import(
     *,
     name: str | None = None,
     merge: bool = False,
+    persist_local_fingerprint_cache: bool = True,
 ) -> ImportSessionsPlan:
     with import_rollout_source_paths(source_path) as source_paths:
         return plan_import_source_paths(
@@ -870,6 +920,7 @@ def plan_sessions_import(
             sessions_dir=sessions_dir,
             name=name,
             merge=merge,
+            persist_local_fingerprint_cache=persist_local_fingerprint_cache,
         )
 
 
@@ -964,6 +1015,7 @@ def import_sessions(
             sessions_dir=sessions_dir,
             name=name,
             merge=merge,
+            persist_local_fingerprint_cache=True,
         )
         selected_plans = (*plan.import_plans, *plan.fast_forward_plans)
         if not selected_plans:

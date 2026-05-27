@@ -34,6 +34,13 @@ from codex_sessions.formats.markdown.output import (  # noqa: E402
 )
 from codex_sessions.formats.yaml import convert_jsonl_to_yaml_stream  # noqa: E402
 from codex_sessions.search.cache import search_cache_path  # noqa: E402
+from codex_sessions.sessions.cache import (  # noqa: E402
+    read_session_cache,
+    session_cache_entry,
+    session_cache_key,
+    session_cache_path,
+    write_session_cache,
+)
 from codex_sessions.sessions.display import (  # noqa: E402
     format_local_timestamp,
     local_timezone_offset_label,
@@ -43,6 +50,7 @@ from codex_sessions.sessions.paths import (  # noqa: E402
     default_output_path,
     resolve_output_path,
 )
+from codex_sessions.sessions.rollout import FileFingerprint  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
@@ -1963,6 +1971,99 @@ class CliTests(unittest.TestCase):
             self.assertIn("Fingerprint:", output)
             self.assertIn("sha256", output)
 
+    def test_import_conflict_reuses_cached_existing_rollout_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            session_id = "21212121-3131-3131-3131-313131313131"
+            filename = f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            source_path = source_dir / filename
+            target_path = codex_home / "sessions" / "2026" / "04" / "30" / filename
+            target_path.parent.mkdir(parents=True)
+            write_jsonl(
+                source_path,
+                [
+                    import_title_record(
+                        session_id, "Incoming cached conflict", "2026-04-30T18:20:38Z"
+                    ),
+                    import_user_message("incoming", "2026-04-30T18:20:39Z"),
+                ],
+            )
+            write_jsonl(
+                target_path,
+                [
+                    import_title_record(
+                        session_id, "Local cached conflict", "2026-04-30T18:20:38Z"
+                    ),
+                    import_user_message("local", "2026-04-30T18:20:39Z"),
+                ],
+            )
+            target_stat = target_path.stat()
+            cached_sha = "c" * 64
+            write_session_cache(
+                session_cache_path(codex_home),
+                {
+                    session_cache_key(target_path): session_cache_entry(
+                        target_path,
+                        target_stat,
+                        fingerprint=FileFingerprint(size=target_stat.st_size, sha256=cached_sha),
+                    )
+                },
+            )
+
+            with patch(
+                "codex_sessions.sessions.cache.file_fingerprint",
+                side_effect=AssertionError("cached fingerprint should be reused"),
+            ):
+                buffer = StringIO()
+                with redirect_stdout(buffer):
+                    result = main(["import", "--codex-home", str(codex_home), str(source_path)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 1)
+            self.assertIn("ID conflicts: 1", output)
+            self.assertIn(f"sha256 {cached_sha[:12]}", output)
+
+    def test_import_dry_run_does_not_persist_existing_rollout_fingerprint_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            session_id = "21212121-3232-3232-3232-323232323232"
+            filename = f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            source_path = source_dir / filename
+            target_path = codex_home / "sessions" / "2026" / "04" / "30" / filename
+            target_path.parent.mkdir(parents=True)
+            write_jsonl(
+                source_path,
+                [
+                    import_title_record(
+                        session_id, "Incoming dry cache conflict", "2026-04-30T18:20:38Z"
+                    ),
+                    import_user_message("incoming", "2026-04-30T18:20:39Z"),
+                ],
+            )
+            write_jsonl(
+                target_path,
+                [
+                    import_title_record(
+                        session_id, "Local dry cache conflict", "2026-04-30T18:20:38Z"
+                    ),
+                    import_user_message("local", "2026-04-30T18:20:39Z"),
+                ],
+            )
+
+            with redirect_stdout(StringIO()):
+                result = main(
+                    ["import", "--dry-run", "--codex-home", str(codex_home), str(source_path)]
+                )
+
+            self.assertEqual(result, 1)
+            self.assertFalse(session_cache_path(codex_home).exists())
+
     def test_import_merge_fast_forwards_existing_rollout_and_reports_title_update(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -2724,6 +2825,51 @@ class CliTests(unittest.TestCase):
             self.assertIn("Imported session:", output)
             self.assertTrue(imported_path.exists())
             self.assertEqual(index_records[0]["id"], session_id)
+
+    def test_import_zip_caches_local_existing_fingerprints_not_temp_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_zip = root / "sessions.zip"
+            session_id = "53535353-6464-6464-6464-646464646464"
+            filename = f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            local_path = codex_home / "sessions" / "2026" / "04" / "30" / filename
+            local_path.parent.mkdir(parents=True)
+            write_jsonl(
+                local_path,
+                [
+                    import_title_record(
+                        session_id, "Local zip cache conflict", "2026-04-30T18:20:38Z"
+                    ),
+                    import_user_message("local", "2026-04-30T18:20:39Z"),
+                ],
+            )
+            incoming_records = [
+                import_title_record(
+                    session_id, "Incoming zip cache conflict", "2026-04-30T18:20:38Z"
+                ),
+                import_user_message("incoming", "2026-04-30T18:20:39Z"),
+            ]
+            with zipfile.ZipFile(source_zip, "w") as archive:
+                archive.writestr(
+                    f"nested/{filename}",
+                    "\n".join(json.dumps(record) for record in incoming_records) + "\n",
+                )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_zip)])
+
+            cache_entries = read_session_cache(session_cache_path(codex_home))
+            cached_paths = {
+                path
+                for entry in cache_entries.values()
+                if isinstance(entry, dict) and isinstance((path := entry.get("path")), str)
+            }
+            self.assertEqual(result, 1)
+            self.assertIn(str(local_path.resolve()), cached_paths)
+            self.assertEqual(cached_paths, {str(local_path.resolve())})
+            self.assertTrue(all("nested" not in path for path in cached_paths))
 
     def test_export_by_id_writes_readable_file_with_index_title_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

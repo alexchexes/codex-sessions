@@ -1112,6 +1112,7 @@ def run_import_command(args: argparse.Namespace) -> int:
                 sessions_dir=sessions_dir,
                 name=args.name,
                 merge=args.merge,
+                persist_local_fingerprint_cache=False,
             )
         except (CliError, ValueError) as exc:
             raise SystemExit(str(exc)) from exc
