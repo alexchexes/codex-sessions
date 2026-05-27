@@ -1840,6 +1840,25 @@ class CliTests(unittest.TestCase):
 
             self.assertIn("locked", str(raised.exception))
 
+    def test_install_skill_command_installs_codex_sessions_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            legacy_skill = codex_home / "skills" / "read-codex-session"
+            legacy_skill.mkdir(parents=True)
+            legacy_skill.joinpath("SKILL.md").write_text("old skill", encoding="utf-8")
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["install-skill", "--codex-home", str(codex_home)])
+
+            installed_skill = codex_home / "skills" / "codex-sessions"
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertTrue(installed_skill.joinpath("SKILL.md").is_file())
+            self.assertFalse(legacy_skill.exists())
+            self.assertIn("Installed Codex skill", output)
+            self.assertIn("Removed old skill", output)
+
     def test_import_inserts_rollout_title_event_when_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

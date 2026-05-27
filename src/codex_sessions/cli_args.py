@@ -330,6 +330,22 @@ def parse_reset_state_cache_args(
     return parser.parse_args(argv)
 
 
+def parse_install_skill_args(
+    argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} install-skill",
+        description="Install or update the bundled Codex skill under Codex home.",
+    )
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=default_codex_home(),
+        help="Codex home directory. Defaults to CODEX_HOME or ~/.codex.",
+    )
+    return parser.parse_args(argv)
+
+
 def parse_sync_args(
     argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
 ) -> argparse.Namespace:
@@ -496,6 +512,8 @@ def parse_args(
             "  sync       synchronize sessions through a local folder\n\n"
             "  reset-state-cache\n"
             "             back up and reset Codex state cache files\n\n"
+            "  install-skill\n"
+            "             install or update the bundled Codex skill\n\n"
             "Markdown include presets:\n"
             "  dialogue   visible user/Codex messages, reasoning, progress messages\n"
             "  default    dialogue plus tool calls and tool outputs\n"

@@ -40,6 +40,9 @@ codex-sessions = "codex_sessions.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/codex_sessions"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"skills/codex-sessions" = "codex_sessions/skills/bundled/codex-sessions"
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

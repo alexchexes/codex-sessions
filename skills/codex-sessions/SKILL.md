@@ -1,9 +1,9 @@
 ---
-name: read-codex-session
-description: Read or recover context from previous Codex conversations or from the current conversation before context compaction. Use when asked to summarize, inspect, remember, or hand off context from an earlier or current Codex dialogue.
+name: codex-sessions
+description: Search, inspect, summarize, or recover context from previous Codex conversations or from the current conversation before context compaction.
 ---
 
-# Read Codex Session
+# Codex Sessions
 
 Use this skill to inspect Codex session history without loading raw rollout JSONL into context.
 
@@ -17,13 +17,13 @@ Use this skill to inspect Codex session history without loading raw rollout JSON
 2. Prepare compact Markdown with the bundled helper:
 
 ```bash
-python ~/.codex/skills/read-codex-session/scripts/prepare_session_markdown.py <target>
+python ~/.codex/skills/codex-sessions/scripts/prepare_session_markdown.py <target>
 ```
 
 On Windows PowerShell:
 
 ```powershell
-python $env:USERPROFILE\.codex\skills\read-codex-session\scripts\prepare_session_markdown.py <target>
+python $env:USERPROFILE\.codex\skills\codex-sessions\scripts\prepare_session_markdown.py <target>
 ```
 
 The helper writes Markdown under `$CODEX_HOME/tmp/sessions/...` and prints the path.
@@ -40,11 +40,11 @@ previews.
 Use a higher-detail pass only when needed:
 
 ```bash
-python ~/.codex/skills/read-codex-session/scripts/prepare_session_markdown.py <target> --md-tools names
-python ~/.codex/skills/read-codex-session/scripts/prepare_session_markdown.py <target> --md-tools smart
-python ~/.codex/skills/read-codex-session/scripts/prepare_session_markdown.py <target> --md-tools preview --preview-chars 1200
-python ~/.codex/skills/read-codex-session/scripts/prepare_session_markdown.py <target> --md-tools full
-python ~/.codex/skills/read-codex-session/scripts/prepare_session_markdown.py <target> --md-include metadata
+python ~/.codex/skills/codex-sessions/scripts/prepare_session_markdown.py <target> --md-tools names
+python ~/.codex/skills/codex-sessions/scripts/prepare_session_markdown.py <target> --md-tools smart
+python ~/.codex/skills/codex-sessions/scripts/prepare_session_markdown.py <target> --md-tools preview --preview-chars 1200
+python ~/.codex/skills/codex-sessions/scripts/prepare_session_markdown.py <target> --md-tools full
+python ~/.codex/skills/codex-sessions/scripts/prepare_session_markdown.py <target> --md-include metadata
 ```
 
 Use `--md-include metadata` when turn context, token counts, cwd, model, or rate-limit information matters.
@@ -90,9 +90,9 @@ files so Codex rebuilds its state cache.
 If the helper is unavailable, run `codex-sessions` directly:
 
 ```bash
-codex-sessions --md-tools smart <rollout.jsonl> <output.md>
-codex-sessions --md-tools preview --md-tool-preview-chars 1200 <rollout.jsonl> <output.md>
-codex-sessions --md-images extract <rollout.jsonl> <output.md>
+codex-sessions --md-tools smart <rollout.jsonl> -o <output.md>
+codex-sessions --md-tools preview --md-tool-preview-chars 1200 <rollout.jsonl> -o <output.md>
+codex-sessions --md-images extract <rollout.jsonl> -o <output.md>
 ```
 
 Avoid opening raw JSONL except for narrow targeted searches such as finding a missing record type.

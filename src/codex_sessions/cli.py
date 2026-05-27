@@ -14,6 +14,7 @@ from codex_sessions.cli_args import (
     parse_args,
     parse_export_args,
     parse_import_args,
+    parse_install_skill_args,
     parse_list_args,
     parse_markdown_include,
     parse_rename_args,
@@ -84,6 +85,7 @@ from codex_sessions.sessions.transfer import (
     plan_sessions_sync,
     sync_sessions,
 )
+from codex_sessions.skills.install import install_codex_skill
 
 __version__ = "0.1.0"
 
@@ -437,6 +439,31 @@ def run_reset_state_cache_command(args: argparse.Namespace) -> int:
     except (CodexStateError, OSError) as exc:
         raise SystemExit(str(exc)) from exc
     print_state_cache_backups(backups)
+    return 0
+
+
+def run_install_skill_command(args: argparse.Namespace) -> int:
+    codex_home = args.codex_home.expanduser().resolve()
+    try:
+        result = install_codex_skill(codex_home)
+    except CliError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    print_cli_line("Installed Codex skill:", style=STYLE_SUCCESS)
+    print_labeled_text_lines(
+        [
+            ("Name", result.skill_name, STYLE_LABEL),
+            ("Path", result.destination, STYLE_SECONDARY),
+            ("Action", "updated" if result.replaced_existing else "installed", None),
+        ],
+        indent="  ",
+    )
+    if result.removed_legacy_path is not None:
+        print_labeled_text_lines(
+            [("Removed old skill", result.removed_legacy_path, STYLE_SECONDARY)],
+            indent="  ",
+        )
+    print_cli_line("Restart Codex to refresh available skills.", style=STYLE_ATTENTION)
     return 0
 
 
@@ -1538,6 +1565,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_sync_command(parse_sync_args(raw_argv[1:], prog))
     if raw_argv[:1] == ["reset-state-cache"]:
         return run_reset_state_cache_command(parse_reset_state_cache_args(raw_argv[1:], prog))
+    if raw_argv[:1] == ["install-skill"]:
+        return run_install_skill_command(parse_install_skill_args(raw_argv[1:], prog))
 
     args = parse_args(raw_argv, prog)
     codex_home = args.codex_home.expanduser().resolve()

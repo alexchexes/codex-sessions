@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Sessions"
+  short_description: "Search and inspect Codex sessions"
+  default_prompt: "Use $codex-sessions to recover context from an earlier Codex conversation."

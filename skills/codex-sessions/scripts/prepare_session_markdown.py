@@ -183,6 +183,7 @@ def main() -> int:
         "--md-tool-preview-chars",
         str(args.preview_chars),
         str(input_path),
+        "-o",
         str(output_path),
     ]
     subprocess.run(command, check=True)

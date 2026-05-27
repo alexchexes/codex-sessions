@@ -38,6 +38,18 @@ Install the latest version from GitHub:
 pipx install git+https://github.com/alexchexes/codex-sessions.git
 ```
 
+Update an existing `pipx` install:
+
+```bash
+pipx upgrade codex-sessions
+```
+
+If `pipx` cannot reuse the original Git install spec, reinstall from GitHub:
+
+```bash
+pipx install --force git+https://github.com/alexchexes/codex-sessions.git
+```
+
 Or install from a local checkout:
 
 ```bash
@@ -336,24 +348,25 @@ titles.
 
 ## Codex Skill
 
-This repo also includes a Codex skill that helps future Codex sessions inspect
-previous conversations without loading large raw session files directly.
+This repo also includes a Codex skill that helps Codex inspect any existing
+conversations without reading large raw session rollouts directly.
 
-Install or update the skill from a local checkout:
+Install or update the bundled Codex skill:
 
 ```bash
-mkdir -p ~/.codex/skills
-cp -r skills/read-codex-session ~/.codex/skills/
+codex-sessions install-skill
 ```
 
-In PowerShell:
+This writes the `codex-sessions` skill under Codex home and removes the old
+`read-codex-session` skill copy if present.
 
-```powershell
-New-Item -ItemType Directory -Force $env:USERPROFILE\.codex\skills
-Copy-Item -Recurse -Force .\skills\read-codex-session $env:USERPROFILE\.codex\skills\
+From a checkout, you can also run the command without installing the CLI:
+
+```bash
+PYTHONPATH=src python -m codex_sessions install-skill
 ```
 
-After restarting Codex, ask for `$read-codex-session` or ask Codex to recover
+After restarting Codex, ask for `$codex-sessions` or ask Codex to recover
 context from an earlier conversation.
 
 ## Markdown Detail
