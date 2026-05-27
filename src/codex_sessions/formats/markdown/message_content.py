@@ -50,6 +50,7 @@ def searchable_user_message_text(text: str) -> str:
 
     stripped = text.lstrip()
     if stripped.startswith("# Context from my IDE setup:"):
+        # IDE context is useful metadata, but default search should target the user's request.
         marker = "## My request for Codex:"
         marker_index = text.find(marker)
         if marker_index == -1:

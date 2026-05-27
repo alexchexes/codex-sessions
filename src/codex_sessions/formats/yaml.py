@@ -35,6 +35,7 @@ def render_scalar(value: Any) -> str:
 def block_style_lines(text: str) -> tuple[str, list[str]]:
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     trailing_newlines = len(normalized) - len(normalized.rstrip("\n"))
+    # Preserve YAML's trailing-newline semantics when converting multiline strings.
     if trailing_newlines == 0:
         header = "|-"
     elif trailing_newlines == 1:

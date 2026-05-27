@@ -544,6 +544,7 @@ def parse_markdown_include(spec: str) -> set[str]:
     if not parts:
         parts = ["default"]
 
+    # The first token may be a preset; later tokens are always additive/removal modifiers.
     first = parts[0]
     if first in MARKDOWN_PRESETS:
         features = set(MARKDOWN_PRESETS[first])

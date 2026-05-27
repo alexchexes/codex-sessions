@@ -86,6 +86,7 @@ def make_search_line(
     if prefix_end == -1 or any(start < prefix_end for start, _ in matches):
         prefix_end = 0
 
+    # Keep short labels like "User:" or "Tool call: shell_command:" stable while trimming.
     prefix = source_line[:prefix_end]
     if width - len(prefix) < 20:
         prefix = ""
@@ -134,6 +135,7 @@ def compact_line_content(
     if len(matches) == 1:
         snippet, snippet_matches = centered_match_snippet(content, matches[0], width)
         return snippet, snippet_matches, None
+    # Many hits on one long line are usually less useful than one readable sample plus a count.
     if len(matches) > MAX_MATCHES_BEFORE_LINE_OMISSION:
         return compact_line_with_omission_note(content, matches, width)
 

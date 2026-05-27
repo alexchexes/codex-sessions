@@ -117,6 +117,7 @@ def search_document_lines(document: SearchDocument, options: SearchOptions) -> l
 
     for group in line_groups:
         for line in group:
+            # Search output is a quick index, so repeated identical rollout lines add noise.
             if line and line not in seen_lines:
                 seen_lines.add(line)
                 lines.append(line)
@@ -324,6 +325,7 @@ def load_search_documents(
             except OSError as exc:
                 warnings.append(f"Could not write search cache {cache_path}: {exc}")
     if metadata_cache_entries is not None:
+        # This neutral cache is seeded here because list/find already parse every rollout.
         metadata_cache_dirty = (
             prune_missing_session_cache_entries(metadata_cache_entries) or metadata_cache_dirty
         )

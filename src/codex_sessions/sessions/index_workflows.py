@@ -159,6 +159,7 @@ def list_session_display_infos_with_warnings(
             normalized_id = normalize_session_id(session_file.session_id)
             session_files_by_id.setdefault(normalized_id, []).append(session_file)
 
+    # Keep index order first, then append rollout-only files so cross-check warnings are stable.
     indexed_ids = {normalize_session_id(entry.session_id) for entry in index_entries}
     infos = []
     for entry in index_entries:
@@ -256,6 +257,7 @@ def rename_session_index_entry(
     rollout_changed = False
     if rollout_path is not None:
         rollout_records = read_rollout_records(rollout_path)
+        # The Codex UI can restore titles from rollout events, so rename both index and rollout.
         updated_rollout_records, rollout_thread_name, rollout_changed = renamed_rollout_records(
             rollout_records, session_id, normalized_new_thread_name
         )

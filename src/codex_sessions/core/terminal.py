@@ -20,6 +20,7 @@ def auto_color_forced(environ: Mapping[str, str]) -> bool:
 
 
 def is_msys_terminal_environment(environ: Mapping[str, str]) -> bool:
+    """Detect Git Bash/MSYS terminals, which often look like pipes to Python on Windows."""
     term = environ.get("TERM")
     if not term or term == "dumb":
         return False
@@ -63,6 +64,7 @@ def console_color_options(
         return None, True
     if auto_color_forced(environ):
         return True, False
+    # Rich disables colors for Windows pipes, but Git Bash/mintty can render ANSI there.
     if is_msys_terminal_environment(environ) and is_windows_pipe_stream(stream):
         return True, False
     return None, False

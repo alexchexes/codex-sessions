@@ -20,6 +20,7 @@ def iter_jsonl_objects(input_path: Path) -> Iterable[tuple[int, dict[str, Any]]]
 
 
 def iter_concatenated_json_objects(input_path: Path) -> Iterable[tuple[int, Any]]:
+    """Read JSONL that may contain several adjacent JSON objects on one physical line."""
     decoder = json.JSONDecoder()
     with input_path.open("r", encoding="utf-8") as src:
         for line_number, raw_line in enumerate(src, start=1):

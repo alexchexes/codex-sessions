@@ -367,6 +367,7 @@ def print_deferred_state_cache_command() -> None:
 
 
 def can_retry_state_cache_reset_interactively(non_interactive: bool) -> bool:
+    """Only prompt when both streams are attached to a terminal."""
     return not non_interactive and sys.stdin.isatty() and sys.stdout.isatty()
 
 
@@ -404,6 +405,7 @@ def print_mutation_state_cache_status(
     *,
     non_interactive: bool,
 ) -> None:
+    """Print the follow-up needed after changing rollout or index files."""
     print_cli_line()
     if reset_skipped:
         print_deferred_state_cache_command()

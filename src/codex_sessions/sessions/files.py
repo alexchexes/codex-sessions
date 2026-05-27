@@ -41,6 +41,7 @@ def session_id_from_metadata(path: Path) -> str | None:
 def session_file_metadata(
     path: Path, *, include_ended_at: bool = False
 ) -> tuple[str | None, datetime | None, datetime | None]:
+    """Read cheap rollout metadata; full last-timestamp scans are opt-in."""
     session_id = session_id_from_path(path)
     started_at: datetime | None = None
     ended_at: datetime | None = None
@@ -67,6 +68,7 @@ def session_file_metadata(
                 break
             if count >= 20:
                 if include_ended_at:
+                    # Last-interaction time needs the whole file; ID/start usually do not.
                     continue
                 break
     except (OSError, ValueError):

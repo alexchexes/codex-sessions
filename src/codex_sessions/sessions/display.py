@@ -20,6 +20,8 @@ SESSION_STATUS_STYLE = "bold bright_yellow"
 
 @dataclass(frozen=True)
 class SessionDisplayInfo:
+    """Structured session row data shared by plain, colored, list, and search output."""
+
     session_id: str | None
     title: str | None
     started_at: datetime | None = None

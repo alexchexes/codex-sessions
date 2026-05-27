@@ -13,6 +13,7 @@ def parse_timestamp(value: Any) -> datetime | None:
 
     fractional = re.search(r"\.(\d+)(?=[+-]\d\d:?\d\d$|$)", text)
     if fractional and len(fractional.group(1)) > 6:
+        # Codex can emit nanosecond precision; datetime.fromisoformat accepts microseconds.
         text = text[: fractional.start(1) + 6] + text[fractional.end(1) :]
 
     try:

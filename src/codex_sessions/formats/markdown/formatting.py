@@ -61,6 +61,7 @@ def fenced_block(content: str, language: str = "") -> str:
     max_backticks = 2
     for match in re.finditer(r"`+", content):
         max_backticks = max(max_backticks, len(match.group(0)))
+    # Pick a fence longer than any run inside the content so Markdown stays valid.
     fence = "`" * max(3, max_backticks + 1)
     suffix = language if language else ""
     return f"{fence}{suffix}\n{content}\n{fence}"

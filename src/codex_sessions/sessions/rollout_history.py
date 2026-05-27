@@ -37,6 +37,7 @@ def is_thread_name_updated_record(record: dict[str, Any]) -> bool:
 
 
 def comparable_rollout_records(path: Path) -> Iterator[dict[str, Any]]:
+    """Yield records that define history ancestry; title-only changes are ignored."""
     for _, record in iter_jsonl_objects(path):
         if not is_thread_name_updated_record(record):
             yield record
@@ -60,6 +61,7 @@ def compare_rollout_histories(
     resolved_local_fingerprint = local_fingerprint or file_fingerprint(local_path)
     resolved_incoming_fingerprint = incoming_fingerprint or file_fingerprint(incoming_path)
     if resolved_local_fingerprint == resolved_incoming_fingerprint:
+        # Exact file equality is stronger than semantic equivalence and avoids parsing.
         return RolloutHistoryComparison(
             relation=RolloutHistoryRelation.IDENTICAL,
             common_comparable_records=None,

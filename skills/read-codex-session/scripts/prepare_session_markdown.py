@@ -101,6 +101,7 @@ def tool_command(command: str) -> list[str]:
     resolved = shutil.which(command)
     if resolved:
         return [resolved]
+    # Installed skills often run before the console script is on PATH in a new checkout.
     return [sys.executable, "-m", "codex_sessions"]
 
 

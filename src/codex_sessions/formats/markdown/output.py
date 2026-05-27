@@ -136,6 +136,7 @@ def convert_jsonl_to_markdown(input_path: Path, output_path: Path, options: Mark
         normalized_body = body.strip()
         if not normalized_body:
             return
+        # Newer rollouts can contain the same visible message in response and event records.
         key = (title, normalized_body)
         if key in seen_dialogue:
             return

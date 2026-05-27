@@ -184,6 +184,7 @@ def divergence_record_preview(
 
     rendered_groups = render_search_line_groups(record)
     lines: list[str] = []
+    # Divergence output should prefer what the user would recognize before raw metadata.
     for preferred_group in ("visible", "tools", "metadata"):
         for group, group_lines in rendered_groups:
             if group == preferred_group:
@@ -215,6 +216,7 @@ def divergence_record_preview(
 def import_target_date(source_path: Path, document: SearchDocument) -> tuple[str, str, str]:
     filename_date = rollout_filename_date(source_path)
     if filename_date is not None:
+        # Exported and native rollout names are authoritative for Codex's YYYY/MM/DD layout.
         return filename_date
     if document.started_at is None:
         raise CliError(
@@ -476,6 +478,7 @@ def apply_import_plan_to_session_index_records(
         updated_record = dict(record)
         updated_record["thread_name"] = plan.thread_name
         if plan.index_action == "advance":
+            # Fast-forward imports are the only path that should advance updated_at.
             updated_record["updated_at"] = format_session_index_timestamp(
                 plan.ended_at or plan.started_at
             )
@@ -566,6 +569,7 @@ def import_bare_rollout(
 def zip_member_output_path(temp_dir: Path, index: int, member_name: str) -> Path:
     member_path = PurePosixPath(member_name)
     name = member_path.name or f"rollout-{index}.jsonl"
+    # Use a numbered folder, not a filename prefix, so rollout-* basename parsing still works.
     return temp_dir / f"{index:05d}" / name
 
 
@@ -710,6 +714,7 @@ def split_import_outcomes(
 
     for grouped_outcomes in outcomes_by_id.values():
         if len(grouped_outcomes) > 1:
+            # Duplicate IDs in one import are ambiguous, so all matching inputs are skipped.
             duplicates.append(
                 ImportDuplicateSession(
                     session_id=grouped_outcomes[0].session_id,

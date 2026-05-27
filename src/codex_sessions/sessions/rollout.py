@@ -278,6 +278,7 @@ def thread_name_update_event(
 def renamed_rollout_records(
     records: Sequence[dict[str, Any]], session_id: str, new_thread_name: str
 ) -> tuple[list[dict[str, Any]], str | None, bool]:
+    """Update the latest matching title event, or insert one without changing last activity."""
     latest_index: int | None = None
     latest_thread_name: str | None = None
     for index, record in enumerate(records):
@@ -307,6 +308,7 @@ def renamed_rollout_records(
         if isinstance(raw_timestamp, str):
             first_timestamp = raw_timestamp
     inserted_record = thread_name_update_event(session_id, new_thread_name, first_timestamp)
+    # Insert near the start so rename does not look like a new conversation interaction.
     insert_at = 1 if records else 0
     updated_records = list(records)
     updated_records.insert(insert_at, inserted_record)

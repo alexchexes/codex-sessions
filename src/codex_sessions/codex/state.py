@@ -39,6 +39,7 @@ def backup_file(path: Path, backup_dir: Path) -> Path | None:
     backup_dir.mkdir(parents=True, exist_ok=True)
     backup_path = backup_path_for(path, backup_dir)
     shutil.copy2(path, backup_path)
+    # Verify before mutating session/index state so rollback never points at a bad backup.
     if backup_path.read_bytes() != path.read_bytes():
         try:
             backup_path.unlink()
@@ -100,6 +101,7 @@ def is_live_state_cache_file(path: Path) -> bool:
 def backup_state_cache_file(path: Path, backup_dir: Path) -> StateCacheBackup:
     backup_dir.mkdir(parents=True, exist_ok=True)
     backup_path = backup_path_for(path, backup_dir)
+    # Resetting Codex state cache means moving live sqlite files aside, not deleting them.
     path.replace(backup_path)
     if not backup_path.exists():
         raise CodexStateError(f"Could not verify state cache backup: {backup_path}")

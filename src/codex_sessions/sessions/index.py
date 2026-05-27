@@ -50,6 +50,7 @@ def read_session_index(index_path: Path) -> list[SessionIndexEntry]:
         return []
 
     entries = []
+    # Some observed indexes have concatenated JSON objects instead of clean JSONL lines.
     for _, record in iter_concatenated_json_objects(index_path):
         if not isinstance(record, dict):
             continue
@@ -86,6 +87,7 @@ def append_session_index_records(
 ) -> None:
     index_path.parent.mkdir(parents=True, exist_ok=True)
     existing_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
+    # Preserve existing index bytes as much as possible; append only the repaired entries.
     separator = "\n" if existing_text and not existing_text.endswith("\n") else ""
     appended_text = "".join(
         json.dumps(

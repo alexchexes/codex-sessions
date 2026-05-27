@@ -58,6 +58,7 @@ def default_output_path(
         relative_input = input_path.resolve().relative_to(codex_home.resolve())
     except ValueError:
         return codex_home / "tmp" / output_name
+    # Mirror Codex's session date folders under tmp so converted files stay discoverable.
     return (codex_home / "tmp" / relative_input).with_name(output_name)
 
 

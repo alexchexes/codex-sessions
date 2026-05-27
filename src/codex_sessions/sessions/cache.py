@@ -66,6 +66,7 @@ def write_session_cache(cache_path: Path, entries: dict[str, Any]) -> None:
 def cached_session_metadata(
     entry: Any, path: Path, stat_result: os.stat_result
 ) -> SessionCacheEntry | None:
+    """Return cached metadata only when the file identity still matches current stat data."""
     if not isinstance(entry, dict):
         return None
     if entry.get("path") != str(path.resolve()):
@@ -163,6 +164,7 @@ def file_fingerprint_from_session_cache(
     *,
     rebuild_cache: bool = False,
 ) -> tuple[FileFingerprint, os.stat_result, bool]:
+    """Reuse a cached SHA only when path, size, and mtime still match exactly."""
     stat_result = path.stat()
     cache_key = session_cache_key(path)
     metadata = (

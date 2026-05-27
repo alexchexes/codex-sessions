@@ -119,6 +119,7 @@ def append_fenced_preview(
 def render_smart_tool_call_preview(
     full_name: str, arguments: Any, preview_chars: int
 ) -> list[str] | None:
+    """Render compact previews for known tool shapes; unknown tools fall back to names."""
     short_name = normalized_tool_short_name(full_name)
     lines: list[str] = []
 

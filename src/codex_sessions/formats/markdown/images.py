@@ -33,6 +33,7 @@ class MarkdownImageHandler:
         self.output_path = output_path
         self.input_path = input_path
         self.asset_dir = output_path.with_name(f"{output_path.stem}_assets")
+        # A single data URL can appear in multiple sanitized views; extract it once.
         self._links_by_url: dict[str, str] = {}
         self.source_line_number: int | None = None
 
@@ -117,6 +118,7 @@ class MarkdownImageHandler:
         return escape_markdown_reference_comment_text(source)
 
     def inline_image_comment(self) -> str:
+        # Markdown reference comments avoid HTML-comment parser differences around "--".
         return (
             "[//]: # (Inline image; use --md-images truncate or --md-images extract; "
             f"Source: {self.source_comment_reference()}.)"

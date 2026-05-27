@@ -51,6 +51,7 @@ def build_search_document(
     session_id_from_path: SessionIdFromPath,
     render_line_groups: LineGroupRenderer,
 ) -> SearchDocument:
+    """Extract one compact, de-duplicated searchable document from a rollout file."""
     session_id = session_id_from_path(input_path)
     thread_name: str | None = None
     started_at: datetime | None = None
@@ -137,6 +138,7 @@ def infer_title_from_message(text: str) -> str | None:
     if not normalized:
         return None
 
+    # Prefer a complete first sentence when it is short enough to be readable as a title.
     sentence_match = re.search(r"(?<=[.!?])\s+", normalized)
     if sentence_match:
         sentence = normalized[: sentence_match.start() + 1].strip()
