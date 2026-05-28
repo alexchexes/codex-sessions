@@ -11,7 +11,7 @@ Use this skill to inspect Codex session history without loading raw rollout JSON
 
 1. Resolve the target session:
    - If the user gives a rollout path, session ID, exact thread title, or
-     `latest` / `newest` / `last`, pass it directly to `codex-sessions`.
+     `latest`, pass it directly to `codex-sessions`.
    - If the user gives a topic, partial ID, or partial title, use
      `codex-sessions find` first, then rerun conversion with a concrete session
      ID. Do not guess between multiple fuzzy matches.

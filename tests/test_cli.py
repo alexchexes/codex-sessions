@@ -126,6 +126,43 @@ class CliTests(unittest.TestCase):
             self.assertIn('encrypted_content: "..."', output)
             self.assertNotIn("secret", output)
 
+    def test_markdown_conversion_ignores_incomplete_final_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            input_path.write_text(
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-26T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "complete record",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + '\n{"timestamp": "2026-04-26T00:00:01Z", "type":',
+                encoding="utf-8",
+            )
+
+            count = convert_jsonl_to_markdown(
+                input_path,
+                output_path,
+                MarkdownOptions(
+                    tool_mode="names",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=False,
+                    redaction="...",
+                ),
+            )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertEqual(count, 1)
+            self.assertIn("complete record", output)
+
     def test_markdown_names_mode_omits_tool_payloads(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "rollout.jsonl"
@@ -755,19 +792,33 @@ class CliTests(unittest.TestCase):
             self.assertIn("session_meta", output_path.read_text(encoding="utf-8"))
             self.assertIn(str(output_path), buffer.getvalue())
 
-    def test_conversion_accepts_latest_session_alias(self) -> None:
+    def test_conversion_accepts_latest_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir) / ".codex"
             sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
             sessions_day.mkdir(parents=True)
             older_path = sessions_day / "rollout-2026-04-30T18-20-39-old.jsonl"
             newer_path = sessions_day / "rollout-2026-04-30T19-20-39-new.jsonl"
-            write_jsonl(older_path, [{"type": "session_meta", "payload": {"id": "old"}}])
+            write_jsonl(
+                older_path,
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "session_meta",
+                        "payload": {"id": "old"},
+                    }
+                ],
+            )
             write_jsonl(
                 newer_path,
                 [
-                    {"type": "session_meta", "payload": {"id": "new"}},
                     {
+                        "timestamp": "2026-04-30T19:20:39Z",
+                        "type": "session_meta",
+                        "payload": {"id": "new"},
+                    },
+                    {
+                        "timestamp": "2026-04-30T19:21:39Z",
                         "type": "response_item",
                         "payload": {
                             "type": "message",
@@ -777,8 +828,8 @@ class CliTests(unittest.TestCase):
                     },
                 ],
             )
-            os.utime(older_path, (1_800_000_000, 1_800_000_000))
-            os.utime(newer_path, (1_800_000_100, 1_800_000_100))
+            os.utime(older_path, (1_800_000_100, 1_800_000_100))
+            os.utime(newer_path, (1_800_000_000, 1_800_000_000))
 
             with redirect_stdout(StringIO()):
                 result = main(["latest", "--md", "--codex-home", str(codex_home)])

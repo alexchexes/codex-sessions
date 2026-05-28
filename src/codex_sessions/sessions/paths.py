@@ -7,6 +7,7 @@ from codex_sessions.sessions.files import (
     discover_session_files,
     discover_session_paths,
     format_session_file_path,
+    session_file_metadata,
 )
 from codex_sessions.sessions.index import (
     is_session_id,
@@ -16,7 +17,7 @@ from codex_sessions.sessions.index import (
     session_index_records,
 )
 
-LATEST_TARGETS = {"latest", "newest", "last"}
+LATEST_TARGET = "latest"
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,15 @@ def resolve_latest_session(codex_home: Path) -> Path:
     matches = discover_session_paths(sessions_dir)
     if not matches:
         raise CliError("No Codex session rollout files found.")
-    return max(matches, key=lambda path: path.stat().st_mtime).resolve()
+    return max(matches, key=latest_session_sort_key).resolve()
+
+
+def latest_session_sort_key(path: Path) -> tuple[int, float]:
+    _, started_at, ended_at = session_file_metadata(path, include_ended_at=True)
+    timestamp = ended_at or started_at
+    if timestamp is not None:
+        return 1, timestamp.timestamp()
+    return 0, path.stat().st_mtime
 
 
 def looks_like_missing_file_path(raw_input: Path) -> bool:
@@ -140,7 +149,7 @@ def resolve_session_title(title: str, codex_home: Path) -> ConversionInput:
 
 def resolve_conversion_input(raw_input: Path, codex_home: Path) -> ConversionInput:
     input_text = str(raw_input)
-    if input_text.lower() in LATEST_TARGETS:
+    if input_text.lower() == LATEST_TARGET:
         latest_path = resolve_latest_session(codex_home)
         return ConversionInput(path=latest_path, output_stem=None)
 
@@ -151,13 +160,20 @@ def resolve_conversion_input(raw_input: Path, codex_home: Path) -> ConversionInp
         )
 
     expanded_input = raw_input.expanduser()
-    if not expanded_input.exists():
-        try:
-            return resolve_session_title(input_text, codex_home)
-        except CliError as exc:
-            if not looks_like_missing_file_path(raw_input):
-                raise
-            raise CliError(f"Input file not found: {raw_input}") from exc
-    if not expanded_input.is_file():
-        raise CliError(f"Input path is not a file: {raw_input}")
-    return ConversionInput(path=expanded_input.resolve(), output_stem=None)
+    if expanded_input.exists():
+        if not expanded_input.is_file():
+            raise CliError(f"Input path is not a file: {raw_input}")
+        return ConversionInput(path=expanded_input.resolve(), output_stem=None)
+
+    codex_home_input = codex_home / raw_input
+    if not raw_input.is_absolute() and codex_home_input.exists():
+        if not codex_home_input.is_file():
+            raise CliError(f"Input path is not a file: {raw_input}")
+        return ConversionInput(path=codex_home_input.resolve(), output_stem=None)
+
+    try:
+        return resolve_session_title(input_text, codex_home)
+    except CliError as exc:
+        if not looks_like_missing_file_path(raw_input):
+            raise
+        raise CliError(f"Input file not found: {raw_input}") from exc

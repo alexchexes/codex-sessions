@@ -83,6 +83,53 @@ class ConversionPathsTests(unittest.TestCase):
             sessions_day.mkdir(parents=True)
             older = sessions_day / "rollout-2026-05-28T10-00-00-older.jsonl"
             newer = sessions_day / "rollout-2026-05-28T11-00-00-newer.jsonl"
+            write_jsonl(
+                older,
+                [
+                    {
+                        "timestamp": "2026-05-28T12:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": "older"},
+                    }
+                ],
+            )
+            write_jsonl(
+                newer,
+                [
+                    {
+                        "timestamp": "2026-05-28T13:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": "newer"},
+                    }
+                ],
+            )
+            os.utime(older, (1_800_000_100, 1_800_000_100))
+            os.utime(newer, (1_800_000_000, 1_800_000_000))
+
+            resolved = resolve_conversion_input(Path("latest"), codex_home)
+
+        self.assertEqual(resolved.path, newer.resolve())
+        self.assertIsNone(resolved.output_stem)
+
+    def test_resolve_conversion_input_accepts_codex_home_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir) / ".codex"
+            relative_path = Path("sessions/2026/05/28/rollout.jsonl")
+            rollout = codex_home / relative_path
+            write_jsonl(rollout, [{"type": "session_meta", "payload": {"id": "session-id"}}])
+
+            resolved = resolve_conversion_input(relative_path, codex_home)
+
+        self.assertEqual(resolved.path, rollout.resolve())
+        self.assertIsNone(resolved.output_stem)
+
+    def test_resolve_conversion_input_latest_falls_back_to_file_mtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir) / ".codex"
+            sessions_day = codex_home / "sessions" / "2026" / "05" / "28"
+            sessions_day.mkdir(parents=True)
+            older = sessions_day / "rollout-older.jsonl"
+            newer = sessions_day / "rollout-newer.jsonl"
             write_jsonl(older, [{"type": "session_meta", "payload": {"id": "older"}}])
             write_jsonl(newer, [{"type": "session_meta", "payload": {"id": "newer"}}])
             os.utime(older, (1_800_000_000, 1_800_000_000))
@@ -91,7 +138,6 @@ class ConversionPathsTests(unittest.TestCase):
             resolved = resolve_conversion_input(Path("latest"), codex_home)
 
         self.assertEqual(resolved.path, newer.resolve())
-        self.assertIsNone(resolved.output_stem)
 
     def test_resolve_conversion_input_accepts_exact_title(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

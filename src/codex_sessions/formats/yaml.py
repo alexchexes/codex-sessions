@@ -97,7 +97,7 @@ def dump_yaml_lines(value: Any, indent: int = 0) -> list[str]:
 def convert_jsonl_to_yaml_stream(input_path: Path, output_path: Path, redaction: str) -> int:
     count = 0
     with output_path.open("w", encoding="utf-8", newline="\n") as dst:
-        for _, obj in iter_jsonl_objects(input_path):
+        for _, obj in iter_jsonl_objects(input_path, ignore_invalid_final_line=True):
             sanitized = sanitize(obj, redaction)
             dst.write("---\n")
             dst.write("\n".join(dump_yaml_lines(sanitized)))

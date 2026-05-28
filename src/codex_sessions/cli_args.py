@@ -537,7 +537,11 @@ def parse_args(
             "Explicit --md-tools values override the tools setting from --md-include.\n"
         ),
     )
-    parser.add_argument("input", type=Path, help="Path to the source JSONL file.")
+    parser.add_argument(
+        "input",
+        type=Path,
+        help="Rollout JSONL path, session ID, exact title, or 'latest'.",
+    )
     parser.add_argument(
         "-o",
         "--output",

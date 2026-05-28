@@ -65,6 +65,21 @@ class YamlOutputTests(unittest.TestCase):
             self.assertIn('encrypted_content: "..."', output)
             self.assertNotIn("secret", output)
 
+    def test_convert_jsonl_to_yaml_stream_ignores_incomplete_final_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.yaml"
+            input_path.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": "session-id"}})
+                + '\n{"type": "response_item"',
+                encoding="utf-8",
+            )
+
+            count = convert_jsonl_to_yaml_stream(input_path, output_path, "...")
+
+            self.assertEqual(count, 1)
+            self.assertIn('id: "session-id"', output_path.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

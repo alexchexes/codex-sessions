@@ -4,9 +4,21 @@
 
 - [Codex sessions](#codex-sessions)
   - [Install](#install)
+  - [Update](#update)
   - [Usage](#usage)
+    - [Converter](#converter)
+      - [Raw JSONL to YAML](#raw-jsonl-to-yaml)
+      - [To Markdown](#to-markdown)
+        - [Adjust Markdown details](#adjust-markdown-details)
+        - [Image handling](#image-handling)
+    - [List sessions](#list-sessions)
+      - [Repair Codex's index file](#repair-codexs-index-file)
+    - [Rename sessions](#rename-sessions)
+    - [Export sessions](#export-sessions)
+    - [Import sessions](#import-sessions)
+    - [Sync sessions](#sync-sessions)
+    - [Search sessions](#search-sessions)
   - [Codex Skill](#codex-skill)
-  - [Markdown Detail](#markdown-detail)
   - [Notes](#notes)
   - [License](#license)
   - [Development](#development)
@@ -38,18 +50,6 @@ Install the latest version from GitHub:
 pipx install git+https://github.com/alexchexes/codex-sessions.git
 ```
 
-Update an existing `pipx` install:
-
-```bash
-pipx upgrade codex-sessions
-```
-
-If `pipx` cannot reuse the original Git install spec, reinstall from GitHub:
-
-```bash
-pipx install --force git+https://github.com/alexchexes/codex-sessions.git
-```
-
 Or install from a local checkout:
 
 ```bash
@@ -76,73 +76,143 @@ $env:PYTHONPATH = "src"
 python -m codex_sessions --help
 ```
 
+## Update
+
+Update an existing `pipx` install:
+
+```bash
+pipx upgrade codex-sessions
+```
+
+If `pipx` cannot reuse the original Git install spec, reinstall from GitHub:
+
+```bash
+pipx install --force git+https://github.com/alexchexes/codex-sessions.git
+```
+
 ## Usage
 
-The installed command is `codex-sessions`.
+### Converter
 
-Convert to YAML:
+The main executable command is `codex-sessions`.
 
-```bash
-codex-sessions sessions/YYYY/MM/DD/rollout.jsonl -o rollout.yaml
-```
+The tool uses `CODEX_HOME` or the current user's `~/.codex` directory by
+default. To use a different Codex home, for example when testing against a copy
+instead of your real Codex state, pass it explicitly with
+`--codex-home ~/.codex`.
 
-Use YAML explicitly:
+The converter target can be:
 
-```bash
-codex-sessions --yaml sessions/YYYY/MM/DD/rollout.jsonl
-```
+- rollout JSONL path, absolute or relative to Codex home dir:
+  - `~/.codex/sessions/YYYY/MM/DD/rollout-<...>.jsonl`
+  - `sessions/YYYY/MM/DD/rollout-<...>.jsonl`
+- session ID: `019dd5ce-19e1-78c3-9313-325228ddd983`
+- exact title: `"Fix schema mismatch for enums"`
+- `latest` - the session whose rollout contains the most recent record timestamp.
+  If rollout timestamps are unavailable, falls back to file modified time.
 
-Convert to Markdown:
+#### Raw JSONL to YAML
 
-```bash
-codex-sessions sessions/YYYY/MM/DD/rollout.jsonl -o rollout.md
-```
-
-Use Markdown explicitly when no `.md` output path is supplied:
-
-```bash
-codex-sessions --md sessions/YYYY/MM/DD/rollout.jsonl
-```
-
-The longer `--format md` form is also supported.
-
-Markdown output truncates base64 data images by default so large screenshots do
-not fill the `.md` file with inline image payloads. The placeholder includes
-the original rollout path/line and a short base64 prefix so the image can still
-be found in the source JSONL. To write those images as real files next to the
-Markdown and link them from the document, use:
+If you need to inspect low-level session rollout records, convert the JSONL
+rollout to more readable YAML:
 
 ```bash
-codex-sessions --md --md-images extract sessions/YYYY/MM/DD/rollout.jsonl
+# default is conversion to YAML, no arguments except target are needed:
+codex-sessions <ID-or-title-or-path>
+
+# explicit output path:
+codex-sessions <ID-or-title-or-path> -o rollout.yaml
+
+# explicit YAML mode:
+codex-sessions <ID-or-title-or-path> --yaml
+
+# current directory as an output path:
+codex-sessions <ID-or-title-or-path> -o ./
+
+# specific Codex home directory:
+codex-sessions --codex-home ~/.codex <ID-or-title-or-path>
 ```
 
-Extracted images are written to a sibling `<markdown-stem>_assets/` directory.
-Use `--md-images inline` only when you want to keep base64 image data inline in
-the Markdown; inline images include a hidden comment pointing back to truncation
-or extraction mode for future cleanup.
+When no output path is supplied, the tool writes under the Codex home directory,
+which defaults to `CODEX_HOME` or `~/.codex`. The converter normally
+writes to a path like `~/.codex/tmp/sessions/YYYY/MM/DD/rollout-<...>.yaml`.
 
-When no output path is supplied, the tool writes under the Codex home
-directory, not the current directory. Codex home defaults to `CODEX_HOME` or
-`~/.codex`, so a session rollout normally writes to a path like
-`~/.codex/tmp/sessions/YYYY/MM/DD/rollout-<...>.yaml`.
+Rollout files are useful for raw data inspection, but they are still noisy even as YAML.
+If you only need to inspect messages, tool calls, progress updates, etc, use the Markdown mode instead.
 
-Convert by session ID:
+#### To Markdown
+
+Use Markdown for a more concise and readable representation of the chat history.
 
 ```bash
-codex-sessions 019dd5ce-19e1-78c3-9313-325228ddd983
+# use default markdown settings and output path
+codex-sessions <ID-or-title-or-path> --md
+
+# if output name ends with `.md`, `--md` mode enabled automatically
+codex-sessions <ID-or-title-or-path> -o path/for/output.md
 ```
 
-Write the converted session to the current directory:
+##### Adjust Markdown details
+
+`--md-include` controls broad optional sections:
 
 ```bash
-codex-sessions 019dd5ce-19e1-78c3-9313-325228ddd983 -o ./
+# Visible user/Codex messages, reasoning, and progress messages.
+codex-sessions <ID-or-title-or-path> --md --md-include dialogue
+
+# Default: dialogue plus concise tool call previews.
+codex-sessions <ID-or-title-or-path> --md --md-include default
+
+# Add metadata tables such as turn_context and token_count.
+codex-sessions <ID-or-title-or-path> --md --md-include metadata
+
+# Metadata plus raw unhandled records.
+codex-sessions <ID-or-title-or-path> --md --md-include full
 ```
 
-Use a specific Codex home directory for session ID lookup and default output:
+`--md-tools` controls tool call/output detail:
 
 ```bash
-codex-sessions --codex-home ~/.codex 019dd5ce-19e1-78c3-9313-325228ddd983
+# Tool names and call IDs only.
+codex-sessions <ID-or-title-or-path> --md --md-tools names
+
+# Useful previews for known tool calls; unknown tools fall back to names.
+codex-sessions <ID-or-title-or-path> --md --md-tools smart
+
+# Tool names plus truncated arguments and outputs.
+codex-sessions <ID-or-title-or-path> --md --md-tools preview
+
+# Tune preview length.
+codex-sessions <ID-or-title-or-path> --md --md-tools preview --md-tool-preview-chars 1200
+
+# Hide tools entirely.
+codex-sessions <ID-or-title-or-path> --md --md-tools none
 ```
+
+The default `--md-tools auto` follows `--md-include`: presets that include tools
+render smart tool call previews, and presets without tools omit them. Explicit
+`--md-tools` values override that behavior. Smart mode keeps tool outputs to
+names and call IDs.
+
+##### Image handling
+
+Images in the original rollout files are base64-encoded.
+
+When converting to Markdown, base64 data is truncated so that large image payloads
+do not fill the `.md` file. The placeholder includes the original rollout path/line
+and a short base64 prefix.
+
+To make images viewable in Markdown renderers, use extraction mode:
+
+```bash
+codex-sessions --md --md-images extract <ID-or-title-or-path>
+```
+
+Images are written to a sibling `<markdown-stem>_assets/` directory. Use
+`--md-images inline` only when you need to keep base64 image data inline in the
+Markdown.
+
+### List sessions
 
 List Codex sessions from `CODEX_HOME` or `~/.codex` and cross-check
 `session_index.jsonl` against actual session files:
@@ -169,6 +239,8 @@ Use a specific Codex home directory:
 codex-sessions list --codex-home ~/.codex
 ```
 
+#### Repair Codex's index file
+
 Preview missing `session_index.jsonl` entries inferred from rollout files:
 
 ```bash
@@ -188,6 +260,8 @@ into the same backup folder. If state cache reset is blocked by a running Codex
 session, the repaired index stays written and the command prompts for a retry
 in an interactive terminal.
 
+### Rename sessions
+
 Rename a session in `session_index.jsonl`:
 
 ```bash
@@ -199,6 +273,8 @@ file is available, backs up changed files under `backups/codex-sessions/`, and
 resets Codex state cache. You can use an exact current title instead of an ID,
 but if multiple sessions have that title the command will ask you to rerun with
 one concrete ID.
+
+### Export sessions
 
 Export one session as a transferable rollout JSONL file:
 
@@ -231,6 +307,8 @@ codex-sessions export --all --except 019ddf68-2bc0-75e2-aecb-22f49ca63c98 -o ./e
 copy is updated so `import` can preserve that title on another machine. Existing
 output files, colliding directory entries, and existing zip archives are refused
 unless `--force` is passed.
+
+### Import sessions
 
 Import a rollout JSONL file, a directory of rollout JSONL files, or an export
 zip into Codex home:
@@ -270,6 +348,8 @@ diverged histories are reported and left untouched. Add `--show-divergence` to
 include a compact preview of the first differing records for each diverged
 session.
 
+### Sync sessions
+
 Synchronize through a local folder:
 
 ```bash
@@ -300,6 +380,8 @@ codex-sessions reset-state-cache
 
 `reset-state-cache` backs up the live cache files before moving them out of
 Codex home and returns a nonzero status if the reset cannot run.
+
+### Search sessions
 
 Search all Codex sessions:
 
@@ -366,50 +448,15 @@ From a checkout, you can also run the command without installing the CLI:
 PYTHONPATH=src python -m codex_sessions install-skill
 ```
 
+For PowerShell:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m codex_sessions install-skill
+```
+
 After restarting Codex, ask for `$codex-sessions` or ask Codex to recover
 context from an earlier conversation.
-
-## Markdown Detail
-
-`--md-include` controls broad optional sections:
-
-```bash
-# Visible user/Codex messages, reasoning, and progress messages.
-codex-sessions --md-include dialogue input.jsonl -o output.md
-
-# Default: dialogue plus concise tool call previews.
-codex-sessions --md-include default input.jsonl -o output.md
-
-# Add metadata tables such as turn_context and token_count.
-codex-sessions --md-include metadata input.jsonl -o output.md
-
-# Metadata plus raw unhandled records.
-codex-sessions --md-include full input.jsonl -o output.md
-```
-
-`--md-tools` controls tool call/output detail:
-
-```bash
-# Tool names and call IDs only.
-codex-sessions --md-tools names input.jsonl -o output.md
-
-# Useful previews for known tool calls; unknown tools fall back to names.
-codex-sessions --md-tools smart input.jsonl -o output.md
-
-# Tool names plus truncated arguments and outputs.
-codex-sessions --md-tools preview input.jsonl -o output.md
-
-# Tune preview length.
-codex-sessions --md-tools preview --md-tool-preview-chars 1200 input.jsonl -o output.md
-
-# Hide tools entirely.
-codex-sessions --md-tools none input.jsonl -o output.md
-```
-
-The default `--md-tools auto` follows `--md-include`: presets that include tools
-render smart tool call previews, and presets without tools omit them. Explicit
-`--md-tools` values override that behavior. Smart mode keeps tool outputs to
-names and call IDs.
 
 ## Notes
 

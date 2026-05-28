@@ -153,7 +153,9 @@ def convert_jsonl_to_markdown(input_path: Path, output_path: Path, options: Mark
         count += 1
 
     with output_path.open("w", encoding="utf-8", newline="\n") as dst:
-        for line_number, raw_record in iter_jsonl_objects(input_path):
+        for line_number, raw_record in iter_jsonl_objects(
+            input_path, ignore_invalid_final_line=True
+        ):
             image_handler.set_source_line(line_number)
             record = sanitize(raw_record, options.redaction)
             record_type = record.get("type")
