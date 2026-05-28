@@ -1,4 +1,6 @@
 import argparse
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -73,6 +75,49 @@ class ConversionPathsTests(unittest.TestCase):
                 resolve_conversion_input(missing, Path(tmpdir) / ".codex")
 
         self.assertEqual(str(raised.exception), f"Input file not found: {missing}")
+
+    def test_resolve_conversion_input_accepts_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir) / ".codex"
+            sessions_day = codex_home / "sessions" / "2026" / "05" / "28"
+            sessions_day.mkdir(parents=True)
+            older = sessions_day / "rollout-2026-05-28T10-00-00-older.jsonl"
+            newer = sessions_day / "rollout-2026-05-28T11-00-00-newer.jsonl"
+            write_jsonl(older, [{"type": "session_meta", "payload": {"id": "older"}}])
+            write_jsonl(newer, [{"type": "session_meta", "payload": {"id": "newer"}}])
+            os.utime(older, (1_800_000_000, 1_800_000_000))
+            os.utime(newer, (1_800_000_100, 1_800_000_100))
+
+            resolved = resolve_conversion_input(Path("latest"), codex_home)
+
+        self.assertEqual(resolved.path, newer.resolve())
+        self.assertIsNone(resolved.output_stem)
+
+    def test_resolve_conversion_input_accepts_exact_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir) / ".codex"
+            session_id = "019f0000-0000-7000-8000-000000000001"
+            sessions_day = codex_home / "sessions" / "2026" / "05" / "28"
+            rollout = sessions_day / f"rollout-2026-05-28T10-00-00-{session_id}.jsonl"
+            sessions_day.mkdir(parents=True)
+            write_jsonl(rollout, [{"type": "session_meta", "payload": {"id": session_id}}])
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Fix README.md docs"}],
+            )
+
+            resolved = resolve_conversion_input(Path("Fix README.md docs"), codex_home)
+
+        self.assertEqual(resolved.path, rollout.resolve())
+        self.assertEqual(resolved.output_stem, session_id)
+
+
+def write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

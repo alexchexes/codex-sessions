@@ -5,12 +5,18 @@ from pathlib import Path
 from codex_sessions.errors import CliError
 from codex_sessions.sessions.files import (
     discover_session_files,
+    discover_session_paths,
     format_session_file_path,
 )
 from codex_sessions.sessions.index import (
     is_session_id,
     normalize_session_id,
+    resolve_session_index_record,
+    session_index_record_id,
+    session_index_records,
 )
+
+LATEST_TARGETS = {"latest", "newest", "last"}
 
 
 @dataclass(frozen=True)
@@ -101,8 +107,43 @@ def resolve_session_id(session_id: str, codex_home: Path) -> Path:
     return matches[0].resolve()
 
 
+def resolve_latest_session(codex_home: Path) -> Path:
+    sessions_dir = codex_home / "sessions"
+    matches = discover_session_paths(sessions_dir)
+    if not matches:
+        raise CliError("No Codex session rollout files found.")
+    return max(matches, key=lambda path: path.stat().st_mtime).resolve()
+
+
+def looks_like_missing_file_path(raw_input: Path) -> bool:
+    input_text = str(raw_input)
+    return raw_input.suffix != "" or "/" in input_text or "\\" in input_text
+
+
+def resolve_session_title(title: str, codex_home: Path) -> ConversionInput:
+    try:
+        _, record = resolve_session_index_record(
+            session_index_records(codex_home / "session_index.jsonl"),
+            title,
+        )
+    except ValueError as exc:
+        raise CliError(str(exc)) from exc
+
+    session_id = session_index_record_id(record)
+    if session_id is None:
+        raise CliError(f"session_index.jsonl entry for title {title!r} has no ID.")
+    return ConversionInput(
+        path=resolve_session_id(session_id, codex_home),
+        output_stem=normalize_session_id(session_id),
+    )
+
+
 def resolve_conversion_input(raw_input: Path, codex_home: Path) -> ConversionInput:
     input_text = str(raw_input)
+    if input_text.lower() in LATEST_TARGETS:
+        latest_path = resolve_latest_session(codex_home)
+        return ConversionInput(path=latest_path, output_stem=None)
+
     if is_session_id(input_text):
         return ConversionInput(
             path=resolve_session_id(input_text, codex_home),
@@ -111,7 +152,12 @@ def resolve_conversion_input(raw_input: Path, codex_home: Path) -> ConversionInp
 
     expanded_input = raw_input.expanduser()
     if not expanded_input.exists():
-        raise CliError(f"Input file not found: {raw_input}")
+        try:
+            return resolve_session_title(input_text, codex_home)
+        except CliError as exc:
+            if not looks_like_missing_file_path(raw_input):
+                raise
+            raise CliError(f"Input file not found: {raw_input}") from exc
     if not expanded_input.is_file():
         raise CliError(f"Input path is not a file: {raw_input}")
     return ConversionInput(path=expanded_input.resolve(), output_stem=None)

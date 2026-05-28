@@ -755,6 +755,81 @@ class CliTests(unittest.TestCase):
             self.assertIn("session_meta", output_path.read_text(encoding="utf-8"))
             self.assertIn(str(output_path), buffer.getvalue())
 
+    def test_conversion_accepts_latest_session_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir) / ".codex"
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+            older_path = sessions_day / "rollout-2026-04-30T18-20-39-old.jsonl"
+            newer_path = sessions_day / "rollout-2026-04-30T19-20-39-new.jsonl"
+            write_jsonl(older_path, [{"type": "session_meta", "payload": {"id": "old"}}])
+            write_jsonl(
+                newer_path,
+                [
+                    {"type": "session_meta", "payload": {"id": "new"}},
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "latest session body",
+                        },
+                    },
+                ],
+            )
+            os.utime(older_path, (1_800_000_000, 1_800_000_000))
+            os.utime(newer_path, (1_800_000_100, 1_800_000_100))
+
+            with redirect_stdout(StringIO()):
+                result = main(["latest", "--md", "--codex-home", str(codex_home)])
+
+            output_path = (
+                codex_home
+                / "tmp"
+                / "sessions"
+                / "2026"
+                / "04"
+                / "30"
+                / "rollout-2026-04-30T19-20-39-new.md"
+            )
+            self.assertEqual(result, 0)
+            self.assertIn("latest session body", output_path.read_text(encoding="utf-8"))
+
+    def test_conversion_accepts_exact_session_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir) / ".codex"
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+            session_id = "019dd5ce-19e1-78c3-9313-325228ddd983"
+            input_path = sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            write_jsonl(
+                input_path,
+                [
+                    {"type": "session_meta", "payload": {"id": session_id}},
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "title resolved body",
+                        },
+                    },
+                ],
+            )
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Exact conversion title"}],
+            )
+
+            with redirect_stdout(StringIO()):
+                result = main(["Exact conversion title", "--md", "--codex-home", str(codex_home)])
+
+            output_path = (
+                codex_home / "tmp" / "sessions" / "2026" / "04" / "30" / f"{session_id}.md"
+            )
+            self.assertEqual(result, 0)
+            self.assertIn("title resolved body", output_path.read_text(encoding="utf-8"))
+
     def test_list_sessions_cross_checks_index_and_session_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
