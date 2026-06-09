@@ -56,6 +56,7 @@ from codex_sessions.sessions.paths import (
     infer_output_format,
     resolve_conversion_input,
     resolve_output_path,
+    resolve_session_target_paths,
 )
 from codex_sessions.sessions.rollout import (
     ExportSessionPlan,
@@ -186,11 +187,18 @@ def run_search_command(args: argparse.Namespace) -> int:
     )
 
     try:
+        session_paths = resolve_session_target_paths(
+            args.session,
+            codex_home,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+        )
         results, warnings = search_sessions(
             codex_home=codex_home,
             options=options,
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
+            session_paths=session_paths or None,
             use_cache=not args.no_cache,
             rebuild_cache=args.rebuild_cache,
         )

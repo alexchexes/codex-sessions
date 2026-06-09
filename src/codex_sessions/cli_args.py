@@ -147,6 +147,16 @@ def parse_search_args(
         help="Search visible messages, compact metadata, and concise tool call previews.",
     )
     parser.add_argument(
+        "--session",
+        action="append",
+        default=[],
+        metavar="TARGET",
+        help=(
+            "Search only one session. TARGET may be a session ID, exact title, "
+            "rollout path, or 'latest'. May be repeated."
+        ),
+    )
+    parser.add_argument(
         "--codex-home",
         type=Path,
         default=default_codex_home(),

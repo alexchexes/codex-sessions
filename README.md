@@ -396,6 +396,14 @@ By default, `find` searches visible user and Codex messages only. Use
 URL, `--tools` to also search concise tool call previews such as shell commands,
 or `--all` to include both.
 
+Limit search to one or more sessions with `--session`. Targets may be session
+IDs, exact titles, rollout paths, or `latest`:
+
+```bash
+codex-sessions find --session 019dd5ce-19e1-78c3-9313-325228ddd983 "needle"
+codex-sessions find --session "Fix schema mismatch for enums" --tools "rg -n"
+```
+
 `grep` is an alias for `find`:
 
 ```bash

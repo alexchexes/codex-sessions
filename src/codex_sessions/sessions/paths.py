@@ -1,4 +1,6 @@
 import argparse
+import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -103,12 +105,17 @@ def resolve_output_path(
     return expanded_output.resolve()
 
 
-def resolve_session_id(session_id: str, codex_home: Path) -> Path:
-    sessions_dir = codex_home / "sessions"
+def resolve_session_id(
+    session_id: str,
+    codex_home: Path,
+    *,
+    sessions_dir: Path | None = None,
+) -> Path:
+    resolved_sessions_dir = sessions_dir or codex_home / "sessions"
     normalized_id = normalize_session_id(session_id)
     matches = [
         session_file.path
-        for session_file in discover_session_files(sessions_dir)
+        for session_file in discover_session_files(resolved_sessions_dir)
         if (
             session_file.session_id
             and normalize_session_id(session_file.session_id) == normalized_id
@@ -118,7 +125,7 @@ def resolve_session_id(session_id: str, codex_home: Path) -> Path:
         raise CliError(f"No Codex session found for ID: {session_id}")
     if len(matches) > 1:
         rendered_matches = ", ".join(
-            format_session_file_path(path, sessions_dir) for path in matches
+            format_session_file_path(path, resolved_sessions_dir) for path in matches
         )
         raise CliError(
             f"Multiple Codex session files found for ID {session_id}: {rendered_matches}"
@@ -126,9 +133,9 @@ def resolve_session_id(session_id: str, codex_home: Path) -> Path:
     return matches[0].resolve()
 
 
-def resolve_latest_session(codex_home: Path) -> Path:
-    sessions_dir = codex_home / "sessions"
-    matches = discover_session_paths(sessions_dir)
+def resolve_latest_session(codex_home: Path, *, sessions_dir: Path | None = None) -> Path:
+    resolved_sessions_dir = sessions_dir or codex_home / "sessions"
+    matches = discover_session_paths(resolved_sessions_dir)
     if not matches:
         raise CliError("No Codex session rollout files found.")
 
@@ -211,10 +218,16 @@ def looks_like_missing_file_path(raw_input: Path) -> bool:
     return raw_input.suffix != "" or "/" in input_text or "\\" in input_text
 
 
-def resolve_session_title(title: str, codex_home: Path) -> ConversionInput:
+def resolve_session_title(
+    title: str,
+    codex_home: Path,
+    *,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+) -> ConversionInput:
     try:
         _, record = resolve_session_index_record(
-            session_index_records(codex_home / "session_index.jsonl"),
+            session_index_records(session_index_path or codex_home / "session_index.jsonl"),
             title,
         )
     except ValueError as exc:
@@ -224,20 +237,26 @@ def resolve_session_title(title: str, codex_home: Path) -> ConversionInput:
     if session_id is None:
         raise CliError(f"session_index.jsonl entry for title {title!r} has no ID.")
     return ConversionInput(
-        path=resolve_session_id(session_id, codex_home),
+        path=resolve_session_id(session_id, codex_home, sessions_dir=sessions_dir),
         output_stem=normalize_session_id(session_id),
     )
 
 
-def resolve_conversion_input(raw_input: Path, codex_home: Path) -> ConversionInput:
+def resolve_conversion_input(
+    raw_input: Path,
+    codex_home: Path,
+    *,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+) -> ConversionInput:
     input_text = str(raw_input)
     if input_text.lower() == LATEST_TARGET:
-        latest_path = resolve_latest_session(codex_home)
+        latest_path = resolve_latest_session(codex_home, sessions_dir=sessions_dir)
         return ConversionInput(path=latest_path, output_stem=None)
 
     if is_session_id(input_text):
         return ConversionInput(
-            path=resolve_session_id(input_text, codex_home),
+            path=resolve_session_id(input_text, codex_home, sessions_dir=sessions_dir),
             output_stem=normalize_session_id(input_text),
         )
 
@@ -253,9 +272,46 @@ def resolve_conversion_input(raw_input: Path, codex_home: Path) -> ConversionInp
             raise CliError(f"Input path is not a file: {raw_input}")
         return ConversionInput(path=codex_home_input.resolve(), output_stem=None)
 
+    sessions_dir_input = (
+        (sessions_dir / raw_input) if sessions_dir and not raw_input.is_absolute() else None
+    )
+    if sessions_dir_input is not None and sessions_dir_input.exists():
+        if not sessions_dir_input.is_file():
+            raise CliError(f"Input path is not a file: {raw_input}")
+        return ConversionInput(path=sessions_dir_input.resolve(), output_stem=None)
+
     try:
-        return resolve_session_title(input_text, codex_home)
+        return resolve_session_title(
+            input_text,
+            codex_home,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+        )
     except CliError as exc:
         if not looks_like_missing_file_path(raw_input):
             raise
         raise CliError(f"Input file not found: {raw_input}") from exc
+
+
+def resolve_session_target_paths(
+    targets: Sequence[str],
+    codex_home: Path,
+    *,
+    session_index_path: Path | None = None,
+    sessions_dir: Path | None = None,
+) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for target in targets:
+        resolved = resolve_conversion_input(
+            Path(target),
+            codex_home,
+            session_index_path=session_index_path,
+            sessions_dir=sessions_dir,
+        ).path
+        normalized_path = os.path.normcase(str(resolved.resolve()))
+        if normalized_path in seen:
+            continue
+        seen.add(normalized_path)
+        paths.append(resolved)
+    return tuple(paths)

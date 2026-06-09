@@ -1,5 +1,6 @@
 import json
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -266,10 +267,13 @@ def load_search_documents(
     sessions_dir: Path,
     redaction: str,
     *,
+    session_paths: Sequence[Path] | None = None,
     use_cache: bool = True,
     rebuild_cache: bool = False,
 ) -> tuple[list[tuple[Path, SearchDocument]], list[str]]:
-    session_paths = discover_session_paths(sessions_dir)
+    resolved_session_paths = (
+        list(session_paths) if session_paths is not None else discover_session_paths(sessions_dir)
+    )
     cache_path = search_cache_path(codex_home)
     cache_entries = read_search_cache(cache_path) if use_cache else None
     metadata_cache_path = session_cache_path(codex_home)
@@ -279,7 +283,7 @@ def load_search_documents(
     documents: list[tuple[Path, SearchDocument]] = []
     warnings: list[str] = []
 
-    for session_path in session_paths:
+    for session_path in resolved_session_paths:
         try:
             document, stat_result, document_rebuilt = search_document_for_file(
                 session_path,
@@ -344,6 +348,7 @@ def search_sessions(
     session_index_path: Path | None = None,
     sessions_dir: Path | None = None,
     *,
+    session_paths: Sequence[Path] | None = None,
     use_cache: bool = True,
     rebuild_cache: bool = False,
 ) -> tuple[list[SearchResult], list[str]]:
@@ -359,6 +364,7 @@ def search_sessions(
         codex_home=codex_home,
         sessions_dir=resolved_sessions_dir,
         redaction=options.redaction,
+        session_paths=session_paths,
         use_cache=use_cache,
         rebuild_cache=rebuild_cache,
     )
