@@ -1,0 +1,142 @@
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from codex_sessions.cli_args import (  # noqa: E402
+    parse_markdown_include,
+    resolve_markdown_tool_mode,
+)
+from codex_sessions.formats.markdown.output import (  # noqa: E402
+    MarkdownOptions,
+    convert_jsonl_to_markdown,
+    render_reasoning,
+)
+
+
+def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    path.write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def import_title_record(session_id: str, thread_name: str, timestamp: str) -> dict[str, Any]:
+    return {
+        "timestamp": timestamp,
+        "type": "event_msg",
+        "payload": {
+            "type": "thread_name_updated",
+            "thread_id": session_id,
+            "thread_name": thread_name,
+        },
+    }
+
+
+def import_user_message(content: str, timestamp: str) -> dict[str, Any]:
+    return {
+        "timestamp": timestamp,
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": content,
+        },
+    }
+
+
+class CliMarkdownTests(unittest.TestCase):
+    def test_markdown_conversion_ignores_incomplete_final_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            input_path.write_text(
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-26T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "complete record",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + '\n{"timestamp": "2026-04-26T00:00:01Z", "type":',
+                encoding="utf-8",
+            )
+
+            count = convert_jsonl_to_markdown(
+                input_path,
+                output_path,
+                MarkdownOptions(
+                    tool_mode="names",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=False,
+                    redaction="...",
+                ),
+            )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertEqual(count, 1)
+            self.assertIn("complete record", output)
+
+    def test_markdown_metadata_table_escapes_pipes_and_newlines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            write_jsonl(
+                input_path,
+                [
+                    {
+                        "timestamp": "2026-04-26T00:00:00Z",
+                        "type": "turn_context",
+                        "payload": {"note": "a|b\nc"},
+                    }
+                ],
+            )
+
+            convert_jsonl_to_markdown(
+                input_path,
+                output_path,
+                MarkdownOptions(
+                    tool_mode="none",
+                    tool_preview_chars=80,
+                    include_metadata=True,
+                    include_raw=False,
+                    redaction="...",
+                ),
+            )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertIn("a\\|b<br>c", output)
+
+    def test_tool_mode_auto_follows_include_preset(self) -> None:
+        self.assertEqual(resolve_markdown_tool_mode({"tools"}, "auto"), "smart")
+        self.assertEqual(resolve_markdown_tool_mode(set(), "auto"), "none")
+        self.assertEqual(resolve_markdown_tool_mode(set(), "names"), "names")
+
+    def test_encrypted_reasoning_renders_as_single_line(self) -> None:
+        self.assertEqual(
+            render_reasoning({"type": "reasoning", "encrypted_content": "secret"}, "..."),
+            "**Reasoning (encrypted_content) ...**",
+        )
+
+    def test_include_modifiers(self) -> None:
+        self.assertEqual(parse_markdown_include("default,-tools"), set())
+        self.assertEqual(parse_markdown_include("dialogue,+metadata"), {"metadata"})
+
+
+if __name__ == "__main__":
+    unittest.main()
