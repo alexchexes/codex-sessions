@@ -146,6 +146,41 @@ class CliImportConflictTests(unittest.TestCase):
             self.assertIn("Fingerprint:", output)
             self.assertIn("sha256", output)
 
+    def test_import_conflict_infers_distinct_titles_without_title_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            session_id = "21212121-2424-2424-2424-242424242424"
+            filename = f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            source_path = source_dir / filename
+            target_path = codex_home / "sessions" / "2026" / "04" / "30" / filename
+            target_path.parent.mkdir(parents=True)
+            write_jsonl(
+                source_path,
+                [
+                    import_user_message("---\nIncoming first message", "2026-04-30T18:20:38Z"),
+                    import_user_message("incoming tail", "2026-04-30T18:20:39Z"),
+                ],
+            )
+            write_jsonl(
+                target_path,
+                [
+                    import_user_message("---\nLocal first message", "2026-04-30T18:20:38Z"),
+                    import_user_message("local tail", "2026-04-30T18:20:39Z"),
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_path)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 1)
+            self.assertIn("Local first message", output)
+            self.assertIn("Incoming first message", output)
+
     def test_import_conflict_reuses_cached_existing_rollout_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

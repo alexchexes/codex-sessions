@@ -8,7 +8,6 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -329,7 +328,7 @@ class CliImportBulkTests(unittest.TestCase):
             self.assertEqual(cached_paths, {str(local_path.resolve())})
             self.assertTrue(all("nested" not in path for path in cached_paths))
 
-    def test_import_directory_uses_manifest_fingerprint_for_incoming_rollout(self) -> None:
+    def test_import_directory_validates_manifest_fingerprint_for_incoming_rollout(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             codex_home = root / "codex"
@@ -364,15 +363,112 @@ class CliImportBulkTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch(
-                "codex_sessions.sessions.transfer.file_fingerprint",
-                side_effect=AssertionError("source manifest fingerprint should be reused"),
-            ):
-                with redirect_stdout(StringIO()):
-                    result = main(["import", "--codex-home", str(codex_home), str(source_dir)])
+            with redirect_stdout(StringIO()):
+                result = main(["import", "--codex-home", str(codex_home), str(source_dir)])
 
             self.assertEqual(result, 0)
             self.assertEqual(read_jsonl(codex_home / "session_index.jsonl")[0]["id"], session_id)
+
+    def test_import_directory_ignores_stale_manifest_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            session_id = "53535353-7575-7575-7575-757575757575"
+            stale_session_id = "53535353-8585-8585-8585-858585858585"
+            filename = f"2026-04-30--Actual-rollout--{session_id}.jsonl"
+            source_path = source_dir / filename
+            records = [
+                import_title_record(session_id, "Actual rollout", "2026-04-30T18:20:38Z"),
+                import_user_message("actual content", "2026-04-30T18:20:39Z"),
+            ]
+            write_jsonl(source_path, records)
+            source_bytes = source_path.read_bytes()
+            (source_dir / "codex-sessions-manifest-v1.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "rollouts": [
+                            {
+                                "path": filename,
+                                "session_id": stale_session_id,
+                                "thread_name": "Stale manifest title",
+                                "started_at": "not-a-timestamp",
+                                "updated_at": "also-not-a-timestamp",
+                                "size": len(source_bytes),
+                                "sha256": hashlib.sha256(source_bytes).hexdigest(),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                result = main(["import", "--codex-home", str(codex_home), str(source_dir)])
+
+            index_record = read_jsonl(codex_home / "session_index.jsonl")[0]
+            imported_paths = list((codex_home / "sessions").rglob("*.jsonl"))
+            self.assertEqual(result, 0)
+            self.assertEqual(index_record["id"], session_id)
+            self.assertEqual(index_record["thread_name"], "Actual rollout")
+            self.assertEqual(len(imported_paths), 1)
+            self.assertIn(session_id, imported_paths[0].name)
+            self.assertNotIn(stale_session_id, imported_paths[0].name)
+
+    def test_import_directory_rejects_stale_same_size_manifest_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            source_dir = root / "incoming"
+            source_dir.mkdir()
+            session_id = "53535353-9595-9595-9595-959595959595"
+            filename = f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            source_path = source_dir / filename
+            target_path = codex_home / "sessions" / "2026" / "04" / "30" / filename
+            target_path.parent.mkdir(parents=True)
+            local_records = [
+                import_title_record(session_id, "Local title", "2026-04-30T18:20:38Z"),
+                import_user_message("local___", "2026-04-30T18:20:39Z"),
+            ]
+            incoming_records = [
+                import_title_record(session_id, "Local title", "2026-04-30T18:20:38Z"),
+                import_user_message("incoming", "2026-04-30T18:20:39Z"),
+            ]
+            write_jsonl(target_path, local_records)
+            write_jsonl(source_path, incoming_records)
+            local_bytes = target_path.read_bytes()
+            incoming_bytes = source_path.read_bytes()
+            self.assertEqual(len(local_bytes), len(incoming_bytes))
+            (source_dir / "codex-sessions-manifest-v1.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "rollouts": [
+                            {
+                                "path": filename,
+                                "session_id": session_id,
+                                "thread_name": "Local title",
+                                "started_at": "2026-04-30T18:20:38+00:00",
+                                "updated_at": "2026-04-30T18:20:39+00:00",
+                                "size": len(local_bytes),
+                                "sha256": hashlib.sha256(local_bytes).hexdigest(),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_dir)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 1)
+            self.assertIn("ID conflicts: 1", output)
+            self.assertIn("file contents do not match the manifest", output)
 
     def test_import_malformed_manifest_warns_and_falls_back_to_hashing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

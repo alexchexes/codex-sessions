@@ -22,9 +22,10 @@ from codex_sessions.codex.state import (
     restore_session_index_backup,
     temp_path_for,
 )
+from codex_sessions.core.json_streams import iter_jsonl_objects
 from codex_sessions.core.timestamps import parse_timestamp
 from codex_sessions.errors import CliError
-from codex_sessions.search.sessions import build_search_document, render_search_line_groups
+from codex_sessions.search.sessions import render_search_line_groups
 from codex_sessions.sessions.cache import (
     file_fingerprint_from_session_cache,
     prune_missing_session_cache_entries,
@@ -32,7 +33,11 @@ from codex_sessions.sessions.cache import (
     session_cache_path,
     write_session_cache,
 )
-from codex_sessions.sessions.documents import SearchDocument, inferred_thread_name
+from codex_sessions.sessions.documents import (
+    SearchDocument,
+    infer_title_from_message,
+    inferred_thread_name,
+)
 from codex_sessions.sessions.files import (
     SessionFile,
     discover_session_files,
@@ -87,6 +92,9 @@ from codex_sessions.sessions.rollout import (
     renamed_rollout_records,
     resolve_export_output_path,
     rollout_filename_date,
+    thread_name_updated_matches_session,
+    thread_name_updated_name,
+    thread_name_updated_session_id,
     write_rollout_records,
 )
 from codex_sessions.sessions.rollout_history import (
@@ -209,6 +217,86 @@ def source_rollout_fingerprint(
     return file_fingerprint(path)
 
 
+def search_document_for_path(
+    path: Path,
+    document_cache: dict[Path, SearchDocument] | None = None,
+) -> SearchDocument:
+    resolved_path = path.resolve()
+    if document_cache is not None:
+        document = document_cache.get(resolved_path)
+        if document is not None:
+            return document
+    document = build_transfer_document(resolved_path)
+    if document_cache is not None:
+        document_cache[resolved_path] = document
+    return document
+
+
+def build_transfer_document(input_path: Path) -> SearchDocument:
+    session_id = session_id_from_path(input_path)
+    thread_name: str | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    first_user_line: str | None = None
+    first_codex_line: str | None = None
+
+    for _, raw_record in iter_jsonl_objects(input_path):
+        record_timestamp = parse_timestamp(raw_record.get("timestamp"))
+        if record_timestamp is not None:
+            ended_at = record_timestamp
+
+        payload = raw_record.get("payload")
+        if started_at is None:
+            started_at = record_timestamp
+            if started_at is None and isinstance(payload, dict):
+                started_at = parse_timestamp(payload.get("timestamp"))
+        if (
+            session_id is None
+            and raw_record.get("type") == "session_meta"
+            and isinstance(payload, dict)
+        ):
+            payload_id = payload.get("id")
+            if isinstance(payload_id, str) and payload_id:
+                session_id = payload_id
+        if raw_record.get("type") == "event_msg" and isinstance(payload, dict):
+            event_session_id = thread_name_updated_session_id(payload)
+            if session_id is None and event_session_id:
+                session_id = event_session_id
+            if thread_name_updated_matches_session(payload, session_id):
+                event_thread_name = thread_name_updated_name(payload)
+                if event_thread_name:
+                    thread_name = event_thread_name
+        if first_user_line is None or first_codex_line is None:
+            for group, lines in render_search_line_groups(raw_record):
+                if group != "visible":
+                    continue
+                for line in lines:
+                    if (
+                        first_user_line is None
+                        and line.startswith("User: ")
+                        and infer_title_from_message(line[len("User: ") :])
+                    ):
+                        first_user_line = line
+                    elif (
+                        first_codex_line is None
+                        and line.startswith("Codex: ")
+                        and infer_title_from_message(line[len("Codex: ") :])
+                    ):
+                        first_codex_line = line
+
+    return SearchDocument(
+        session_id=session_id,
+        thread_name=thread_name,
+        started_at=started_at,
+        ended_at=ended_at,
+        visible_lines=tuple(
+            line for line in (first_user_line, first_codex_line) if line is not None
+        ),
+        metadata_lines=(),
+        tool_lines=(),
+    )
+
+
 def write_local_fingerprint_cache(cache: LocalFingerprintCache | None) -> None:
     if cache is None or not cache.dirty:
         return
@@ -230,7 +318,7 @@ def import_session_side(
     return ImportSessionSide(
         path=path,
         session_id=session_id,
-        thread_name=document.thread_name or inferred_thread_name(document),
+        thread_name=inferred_thread_name(document),
         started_at=document.started_at,
         ended_at=document.ended_at,
         fingerprint=fingerprint,
@@ -317,8 +405,27 @@ def import_target_path(source_path: Path, sessions_dir: Path, document: SearchDo
     return sessions_dir / year / month / day / import_target_filename(source_path, document)
 
 
-def existing_session_files_for_id(session_id: str, sessions_dir: Path) -> list[SessionFile]:
+def session_files_by_normalized_id(
+    session_files: Iterable[SessionFile],
+) -> dict[str, list[SessionFile]]:
+    session_files_by_id: dict[str, list[SessionFile]] = {}
+    for session_file in session_files:
+        if session_file.session_id:
+            session_files_by_id.setdefault(
+                normalize_session_id(session_file.session_id), []
+            ).append(session_file)
+    return session_files_by_id
+
+
+def existing_session_files_for_id(
+    session_id: str,
+    sessions_dir: Path,
+    *,
+    session_files_by_id: Mapping[str, Sequence[SessionFile]] | None = None,
+) -> list[SessionFile]:
     normalized_id = normalize_session_id(session_id)
+    if session_files_by_id is not None:
+        return list(session_files_by_id.get(normalized_id, ()))
     return [
         session_file
         for session_file in discover_session_files(sessions_dir)
@@ -365,6 +472,8 @@ def plan_bare_rollout_import(
     name: str | None = None,
     local_fingerprint_cache: LocalFingerprintCache | None = None,
     source_fingerprints: Mapping[Path, FileFingerprint] | None = None,
+    local_session_files_by_id: Mapping[str, Sequence[SessionFile]] | None = None,
+    document_cache: dict[Path, SearchDocument] | None = None,
 ) -> ImportSessionPlan:
     expanded_source_path = source_path.expanduser().resolve()
     if not expanded_source_path.exists():
@@ -373,13 +482,17 @@ def plan_bare_rollout_import(
         raise CliError(f"Input path is not a file: {source_path}")
 
     resolved_sessions_dir = sessions_dir or codex_home / "sessions"
-    document = build_search_document(expanded_source_path, "...")
+    document = search_document_for_path(expanded_source_path, document_cache)
     if document.session_id is None:
         raise CliError(f"Cannot infer session id from rollout: {source_path}")
 
     target_path = import_target_path(expanded_source_path, resolved_sessions_dir, document)
     source_fingerprint = source_rollout_fingerprint(expanded_source_path, source_fingerprints)
-    existing_files = existing_session_files_for_id(document.session_id, resolved_sessions_dir)
+    existing_files = existing_session_files_for_id(
+        document.session_id,
+        resolved_sessions_dir,
+        session_files_by_id=local_session_files_by_id,
+    )
     existing_rollout_path = first_existing_rollout_for_import(existing_files, target_path)
     existing_rollout_fingerprint = (
         local_rollout_fingerprint(existing_rollout_path, local_fingerprint_cache)
@@ -399,7 +512,7 @@ def plan_bare_rollout_import(
             raise CliError(
                 f"Could not fingerprint existing Codex rollout file: {existing_rollout_path}"
             )
-        existing_document = build_search_document(existing_rollout_path, "...")
+        existing_document = search_document_for_path(existing_rollout_path, document_cache)
         raise ImportRolloutConflict(
             source_path=expanded_source_path,
             existing_path=existing_rollout_path,
@@ -472,8 +585,9 @@ def plan_fast_forward_rollout_import(
     session_index_path: Path | None = None,
     *,
     name: str | None = None,
+    document_cache: dict[Path, SearchDocument] | None = None,
 ) -> ImportSessionPlan:
-    document = build_search_document(source_path, "...")
+    document = search_document_for_path(source_path, document_cache)
     if document.session_id is None:
         raise CliError(f"Cannot infer session id from rollout: {source_path}")
 
@@ -493,7 +607,7 @@ def plan_fast_forward_rollout_import(
     elif existing_index_thread_name:
         normalized_name = existing_index_thread_name
     else:
-        existing_document = build_search_document(existing_path, "...")
+        existing_document = search_document_for_path(existing_path, document_cache)
         normalized_name = existing_document.thread_name or inferred_thread_name(document)
     if not normalized_name:
         raise CliError("Imported session title must not be empty.")
@@ -659,17 +773,19 @@ def manifest_fingerprints_for_paths(
         if entry is None:
             continue
         try:
-            size = path.stat().st_size
+            actual_fingerprint = file_fingerprint(path)
         except OSError as exc:
-            warnings.append(f"Could not stat manifest file {path}: {exc}. Falling back to hashing.")
-            continue
-        if size != entry.fingerprint.size:
             warnings.append(
-                f"Ignored export manifest fingerprint for {manifest_key}: "
-                f"manifest size {entry.fingerprint.size} bytes, file size {size} bytes."
+                f"Could not validate export manifest fingerprint for {path}: {exc}. "
+                "Falling back to import-time hashing."
             )
             continue
-        source_fingerprints[path.resolve()] = entry.fingerprint
+        source_fingerprints[path.resolve()] = actual_fingerprint
+        if actual_fingerprint != entry.fingerprint:
+            warnings.append(
+                f"Ignored export manifest fingerprint for {manifest_key}: "
+                "file contents do not match the manifest."
+            )
     return source_fingerprints, tuple(warnings)
 
 
@@ -731,7 +847,10 @@ def import_rollout_source_bundle(source_path: Path) -> Generator[ImportSourceBun
     if not expanded_source_path.is_file():
         raise CliError(f"Input path is not a file or directory: {source_path}")
     if expanded_source_path.suffix.lower() != ".zip":
-        yield ImportSourceBundle(paths=(expanded_source_path,), source_fingerprints={})
+        yield ImportSourceBundle(
+            paths=(expanded_source_path,),
+            source_fingerprints={},
+        )
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -787,6 +906,7 @@ def merge_conflicting_rollout_import(
     session_index_path: Path | None,
     *,
     name: str | None,
+    document_cache: dict[Path, SearchDocument] | None = None,
 ) -> ImportSessionPlan | ImportSkippedHistory | ImportDivergedConflict:
     existing_fingerprint = conflict.existing_fingerprint or file_fingerprint(conflict.existing_path)
     comparison = compare_rollout_histories(
@@ -809,6 +929,7 @@ def merge_conflicting_rollout_import(
             codex_home=codex_home,
             session_index_path=session_index_path,
             name=name,
+            document_cache=document_cache,
         )
     return import_diverged_conflict(conflict, existing_fingerprint, comparison)
 
@@ -891,12 +1012,17 @@ def plan_import_source_paths(
     merge: bool = False,
     persist_local_fingerprint_cache: bool = True,
     source_fingerprints: Mapping[Path, FileFingerprint] | None = None,
+    document_cache: dict[Path, SearchDocument] | None = None,
     warnings: Sequence[str] = (),
 ) -> ImportSessionsPlan:
     if name is not None and len(source_paths) != 1:
         raise CliError("--name can only be used when importing one rollout file.")
 
     local_fingerprint_cache = load_local_fingerprint_cache(codex_home)
+    resolved_sessions_dir = sessions_dir or codex_home / "sessions"
+    local_session_files_by_id = session_files_by_normalized_id(
+        discover_session_files(resolved_sessions_dir)
+    )
     outcomes: list[ImportSourceOutcome] = []
     failures: list[ImportFailure] = []
     for source_path in source_paths:
@@ -909,6 +1035,8 @@ def plan_import_source_paths(
                 name=name,
                 local_fingerprint_cache=local_fingerprint_cache,
                 source_fingerprints=source_fingerprints,
+                local_session_files_by_id=local_session_files_by_id,
+                document_cache=document_cache,
             )
             outcomes.append(
                 ImportSourceOutcome(
@@ -941,6 +1069,7 @@ def plan_import_source_paths(
                     codex_home=codex_home,
                     session_index_path=session_index_path,
                     name=name,
+                    document_cache=document_cache,
                 )
             else:
                 outcome = ImportConflict(
@@ -997,6 +1126,7 @@ def plan_sessions_import(
     name: str | None = None,
     merge: bool = False,
     persist_local_fingerprint_cache: bool = True,
+    document_cache: dict[Path, SearchDocument] | None = None,
 ) -> ImportSessionsPlan:
     with import_rollout_source_bundle(source_path) as source_bundle:
         return plan_import_source_paths(
@@ -1008,6 +1138,7 @@ def plan_sessions_import(
             merge=merge,
             persist_local_fingerprint_cache=persist_local_fingerprint_cache,
             source_fingerprints=source_bundle.source_fingerprints,
+            document_cache=document_cache,
             warnings=source_bundle.warnings,
         )
 
@@ -1096,6 +1227,7 @@ def import_sessions(
     reset_state_cache: bool = True,
 ) -> ImportSessionsResult:
     with import_rollout_source_bundle(source_path) as source_bundle:
+        document_cache: dict[Path, SearchDocument] = {}
         plan = plan_import_source_paths(
             source_paths=source_bundle.paths,
             codex_home=codex_home,
@@ -1105,6 +1237,7 @@ def import_sessions(
             merge=merge,
             persist_local_fingerprint_cache=True,
             source_fingerprints=source_bundle.source_fingerprints,
+            document_cache=document_cache,
             warnings=source_bundle.warnings,
         )
         selected_plans = (*plan.import_plans, *plan.fast_forward_plans)
@@ -1197,6 +1330,8 @@ def export_session_candidates(
     codex_home: Path,
     session_index_path: Path | None = None,
     sessions_dir: Path | None = None,
+    *,
+    document_cache: dict[Path, SearchDocument] | None = None,
 ) -> list[ExportSessionCandidate]:
     resolved_sessions_dir = sessions_dir or codex_home / "sessions"
     if not resolved_sessions_dir.exists():
@@ -1217,7 +1352,7 @@ def export_session_candidates(
     duplicate_sources_by_id: dict[str, list[Path]] = {}
     for session_file in discover_session_files(resolved_sessions_dir):
         source_path = session_file.path.resolve()
-        document = build_search_document(source_path, "...")
+        document = search_document_for_path(source_path, document_cache)
         session_id = document.session_id or session_file.session_id
         if session_id is None:
             raise CliError(f"Cannot infer session id from rollout: {source_path}")
@@ -1543,7 +1678,7 @@ def plan_session_export(
 
     session_file = resolve_single_session_file_for_export(session_id, resolved_sessions_dir)
     source_path = session_file.path.resolve()
-    document = build_search_document(source_path, "...")
+    document = search_document_for_path(source_path)
     resolved_session_id = document.session_id or session_file.session_id or session_id
     index_thread_name = (
         session_index_record_thread_name(index_record) if index_record is not None else ""
@@ -1785,6 +1920,7 @@ def plan_missing_sessions_export_to_directory(
     excluded_session_ids: set[str],
     session_index_path: Path | None = None,
     sessions_dir: Path | None = None,
+    document_cache: dict[Path, SearchDocument] | None = None,
 ) -> ExportSessionsPlan:
     resolved_sessions_dir = sessions_dir or codex_home / "sessions"
     output_path = output.expanduser()
@@ -1802,6 +1938,7 @@ def plan_missing_sessions_export_to_directory(
         codex_home=codex_home,
         session_index_path=index_path,
         sessions_dir=resolved_sessions_dir,
+        document_cache=document_cache,
     )
     selected_candidates = [
         candidate
@@ -1833,6 +1970,7 @@ def plan_sync_import(
     sessions_dir: Path | None,
     *,
     persist_local_fingerprint_cache: bool,
+    document_cache: dict[Path, SearchDocument] | None = None,
 ) -> ImportSessionsPlan:
     if not sync_dir.exists():
         return empty_import_sessions_plan()
@@ -1846,6 +1984,7 @@ def plan_sync_import(
             sessions_dir=sessions_dir,
             merge=True,
             persist_local_fingerprint_cache=persist_local_fingerprint_cache,
+            document_cache=document_cache,
         )
     except CliError as exc:
         if str(exc).startswith("No rollout JSONL files found in import directory:"):
@@ -1863,12 +2002,14 @@ def plan_sessions_sync(
     persist_local_fingerprint_cache: bool = True,
 ) -> SyncSessionsPlan:
     resolved_sync_dir = sync_dir.expanduser().resolve()
+    document_cache: dict[Path, SearchDocument] = {}
     import_plan = plan_sync_import(
         resolved_sync_dir,
         codex_home,
         session_index_path,
         sessions_dir,
         persist_local_fingerprint_cache=persist_local_fingerprint_cache,
+        document_cache=document_cache,
     )
     export_plan = plan_missing_sessions_export_to_directory(
         codex_home=codex_home,
@@ -1876,6 +2017,7 @@ def plan_sessions_sync(
         excluded_session_ids=import_plan_session_ids(import_plan),
         session_index_path=session_index_path,
         sessions_dir=sessions_dir,
+        document_cache=document_cache,
     )
     return SyncSessionsPlan(
         sync_dir=resolved_sync_dir,

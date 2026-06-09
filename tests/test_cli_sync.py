@@ -6,11 +6,15 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codex_sessions.cli import main  # noqa: E402
+from codex_sessions.sessions.files import (  # noqa: E402
+    discover_session_files as real_discover_session_files,
+)
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
@@ -252,6 +256,53 @@ class CliSyncTests(unittest.TestCase):
             self.assertIn("Same-ID conflicts: 0", output)
             self.assertEqual(local_records[-1]["payload"]["content"], "incoming tail")
             self.assertEqual(index_records[0]["thread_name"], "Remote ahead")
+
+    def test_sync_dry_run_discovers_local_sessions_once_per_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            sync_dir = root / "sync"
+            local_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sync_dir.mkdir()
+            local_day.mkdir(parents=True)
+            local_id = "75757575-7575-7575-7575-757575757575"
+            remote_ids = [
+                "76767676-7676-7676-7676-767676767676",
+                "77777777-7777-7777-7777-777777777777",
+                "78787878-7878-7878-7878-787878787878",
+            ]
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": local_id, "thread_name": "Local sync apply"}],
+            )
+            write_jsonl(
+                local_day / f"rollout-2026-04-30T18-20-39-{local_id}.jsonl",
+                [import_title_record(local_id, "Local sync apply", "2026-04-30T18:20:39Z")],
+            )
+            for index, remote_id in enumerate(remote_ids, start=1):
+                write_jsonl(
+                    sync_dir / f"2026-05-0{index}--Remote-sync-{index}--{remote_id}.jsonl",
+                    [
+                        import_title_record(
+                            remote_id,
+                            f"Remote sync {index}",
+                            f"2026-05-0{index}T18:20:39Z",
+                        )
+                    ],
+                )
+
+            buffer = StringIO()
+            with (
+                patch(
+                    "codex_sessions.sessions.transfer.discover_session_files",
+                    wraps=real_discover_session_files,
+                ) as discover_session_files,
+                redirect_stdout(buffer),
+            ):
+                result = main(["sync", "--dry-run", "--codex-home", str(codex_home), str(sync_dir)])
+
+            self.assertEqual(result, 0)
+            self.assertEqual(discover_session_files.call_count, 2)
 
 
 if __name__ == "__main__":
