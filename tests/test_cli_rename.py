@@ -331,3 +331,81 @@ class CliRenameTests(unittest.TestCase):
             self.assertIn("State cache reset deferred:", output)
             self.assertIn("Retrying state cache reset...", output)
             self.assertIn("State cache reset OK.", output)
+
+    def test_rename_interactive_state_reset_prompt_can_skip_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            session_id = "14141414-1515-1616-1717-181818181818"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Old title"}],
+            )
+
+            with (
+                patch(
+                    "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
+                    side_effect=OSError("locked"),
+                ),
+                patch(
+                    "codex_sessions.cli.can_retry_state_cache_reset_interactively",
+                    return_value=True,
+                ),
+                patch("builtins.input", return_value="n"),
+            ):
+                buffer = StringIO()
+                with redirect_stdout(buffer):
+                    result = main(
+                        [
+                            "rename",
+                            "--codex-home",
+                            str(codex_home),
+                            session_id,
+                            "New title",
+                        ]
+                    )
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("State cache reset deferred:", output)
+            self.assertIn("State cache reset skipped.", output)
+            self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertNotIn("Retrying state cache reset...", output)
+
+    def test_rename_interactive_state_reset_ctrl_c_skips_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            session_id = "14141414-1515-1616-1717-181818181818"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Old title"}],
+            )
+
+            with (
+                patch(
+                    "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
+                    side_effect=OSError("locked"),
+                ),
+                patch(
+                    "codex_sessions.cli.can_retry_state_cache_reset_interactively",
+                    return_value=True,
+                ),
+                patch("builtins.input", side_effect=KeyboardInterrupt),
+            ):
+                buffer = StringIO()
+                with redirect_stdout(buffer):
+                    result = main(
+                        [
+                            "rename",
+                            "--codex-home",
+                            str(codex_home),
+                            session_id,
+                            "New title",
+                        ]
+                    )
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("State cache reset deferred:", output)
+            self.assertIn("State cache reset skipped.", output)
+            self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertNotIn("Retrying state cache reset...", output)

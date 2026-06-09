@@ -386,17 +386,29 @@ def can_retry_state_cache_reset_interactively(non_interactive: bool) -> bool:
     return not non_interactive and sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def prompt_retry_state_cache_reset() -> bool:
+    while True:
+        try:
+            answer = input("Retry state cache reset now? [Y/n] ")
+        except (EOFError, KeyboardInterrupt):
+            print_cli_line()
+            return False
+        normalized = answer.strip().lower()
+        if normalized in ("", "y", "yes"):
+            return True
+        if normalized in ("n", "no"):
+            return False
+        print_cli_line("Please answer y or n.", style=STYLE_ATTENTION)
+
+
 def retry_state_cache_reset_interactively(codex_home: Path) -> None:
     while True:
         print_cli_line()
         print_cli_line(
-            "Close all Codex sessions, then press Enter to retry state cache reset.",
+            "Close all Codex sessions and retry. Or skip and run 'codex-sessions reset-state-cache' later.",
             style=STYLE_ATTENTION,
         )
-        try:
-            input("Press Ctrl+C to keep these changes and reset later. ")
-        except (EOFError, KeyboardInterrupt):
-            print_cli_line()
+        if not prompt_retry_state_cache_reset():
             print_deferred_state_cache_command()
             return
         print_cli_line()
