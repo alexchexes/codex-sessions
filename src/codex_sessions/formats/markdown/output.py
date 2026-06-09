@@ -9,12 +9,10 @@ from codex_sessions.formats.markdown.formatting import (
     render_markdown_table,
 )
 from codex_sessions.formats.markdown.images import MarkdownImageHandler
-from codex_sessions.formats.markdown.message_content import (
-    content_to_text,
-    is_injected_user_context,
-)
+from codex_sessions.formats.markdown.message_content import content_to_text
 from codex_sessions.formats.markdown.tools import render_tool_call, render_tool_output
 from codex_sessions.sessions.documents import sanitize
+from codex_sessions.sessions.message_content import is_injected_user_context
 
 
 @dataclass(frozen=True)

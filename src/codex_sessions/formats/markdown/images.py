@@ -172,13 +172,3 @@ def markdown_code_span(text: str) -> str:
 
 def escape_markdown_reference_comment_text(text: str) -> str:
     return text.replace("\r", " ").replace("\n", " ").replace(")", r"\)")
-
-
-def is_image_content_item(item: Any) -> bool:
-    return isinstance(item, dict) and (
-        item.get("type") in {"image_url", "input_image"} or "image_url" in item
-    )
-
-
-def is_image_wrapper_text(text: str) -> bool:
-    return text.strip().lower() in {"<image>", "</image>"}

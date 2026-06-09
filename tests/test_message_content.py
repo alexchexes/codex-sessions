@@ -3,11 +3,7 @@ import unittest
 from pathlib import Path
 
 from codex_sessions.formats.markdown.images import MarkdownImageHandler
-from codex_sessions.formats.markdown.message_content import (
-    content_to_text,
-    is_injected_user_context,
-    searchable_user_message_text,
-)
+from codex_sessions.formats.markdown.message_content import content_to_text
 
 
 class MessageContentTests(unittest.TestCase):
@@ -45,26 +41,6 @@ class MessageContentTests(unittest.TestCase):
 
         self.assertNotIn("<image>", rendered)
         self.assertIn("image/png data URL", rendered)
-
-    def test_searchable_user_message_text_filters_injected_context(self) -> None:
-        self.assertTrue(is_injected_user_context("# AGENTS.md instructions\n..."))
-        self.assertEqual(searchable_user_message_text("<environment_context>\n..."), "")
-        self.assertEqual(searchable_user_message_text("# AGENTS.md instructions\n..."), "")
-
-    def test_searchable_user_message_text_extracts_actual_ide_request(self) -> None:
-        self.assertEqual(
-            searchable_user_message_text(
-                "# Context from my IDE setup:\n"
-                "## Open tabs:\n"
-                "- file.py\n"
-                "## My request for Codex:\n"
-                "please fix this\n"
-            ),
-            "please fix this",
-        )
-        self.assertEqual(
-            searchable_user_message_text("# Context from my IDE setup:\nno request"), ""
-        )
 
 
 if __name__ == "__main__":

@@ -5,10 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from codex_sessions.errors import CliError
-from codex_sessions.formats.markdown.message_content import (
-    content_to_text,
-    searchable_user_message_text,
-)
 from codex_sessions.formats.markdown.tools import (
     DEFAULT_TOOL_PREVIEW_CHARS,
     normalized_tool_short_name,
@@ -59,6 +55,7 @@ from codex_sessions.sessions.files import (
     session_id_from_path,
 )
 from codex_sessions.sessions.index import normalize_session_id, read_session_index
+from codex_sessions.sessions.message_content import content_to_text, searchable_user_message_text
 
 
 def parse_embedded_json(value: str) -> Any:

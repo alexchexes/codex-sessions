@@ -3,6 +3,8 @@ from typing import Any
 from codex_sessions.formats.markdown.formatting import render_json_block_content
 from codex_sessions.formats.markdown.images import (
     MarkdownImageHandler,
+)
+from codex_sessions.sessions.message_content import (
     is_image_content_item,
     is_image_wrapper_text,
 )
@@ -37,24 +39,3 @@ def content_to_text(content: Any, image_handler: MarkdownImageHandler | None = N
         else:
             parts.append(str(item))
     return "\n\n".join(part for part in parts if part)
-
-
-def is_injected_user_context(text: str) -> bool:
-    stripped = text.lstrip()
-    return stripped.startswith(("# AGENTS.md instructions", "<environment_context>"))
-
-
-def searchable_user_message_text(text: str) -> str:
-    if is_injected_user_context(text):
-        return ""
-
-    stripped = text.lstrip()
-    if stripped.startswith("# Context from my IDE setup:"):
-        # IDE context is useful metadata, but default search should target the user's request.
-        marker = "## My request for Codex:"
-        marker_index = text.find(marker)
-        if marker_index == -1:
-            return ""
-        return text[marker_index + len(marker) :].strip()
-
-    return text

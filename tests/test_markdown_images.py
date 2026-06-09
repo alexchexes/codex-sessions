@@ -7,12 +7,11 @@ from codex_sessions.formats.markdown.images import (
     MarkdownImageHandler,
     describe_data_image,
     image_extension,
-    is_image_content_item,
-    is_image_wrapper_text,
     markdown_code_span,
     markdown_relative_link,
     parse_data_image_url,
 )
+from codex_sessions.sessions.message_content import is_image_content_item, is_image_wrapper_text
 
 
 class MarkdownImageTests(unittest.TestCase):
