@@ -357,15 +357,15 @@ Synchronize through a local folder:
 ```bash
 codex-sessions sync ~/Dropbox/codex-sessions
 codex-sessions sync --dry-run ~/Dropbox/codex-sessions
-codex-sessions sync --merge ~/Dropbox/codex-sessions
 ```
 
 `sync` imports sessions found in the folder, exports local-only sessions back
 to that folder, and writes the same transfer manifest used by bulk export. It
 does not delete sessions from either side. Same-ID sessions already present in
-the sync folder are handled by the import side: identical/equivalent sessions
-are skipped, safely newer folder copies can fast-forward local state with
-`--merge`, and conflicts are reported without overwriting either side.
+the sync folder are compared by rollout history: identical/equivalent sessions
+are skipped, safely newer folder copies can fast-forward local state, local-ahead
+sessions stay local, and diverged conflicts are reported without overwriting
+either side.
 
 Commands that change Codex sessions try to reset the state cache after writing
 their rollout or `session_index.jsonl` changes. If the root `state_*.sqlite*`

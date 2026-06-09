@@ -162,10 +162,96 @@ class CliSyncTests(unittest.TestCase):
                 result = main(["sync", "--codex-home", str(codex_home), str(sync_dir)])
 
             output = buffer.getvalue()
-            self.assertEqual(result, 1)
-            self.assertIn("ID conflicts: 1", output)
+            self.assertEqual(result, 0)
+            self.assertIn("Skipped (local ahead): 1", output)
+            self.assertIn("Same-ID conflicts: 0", output)
             self.assertIn("Exported local-only sessions: 0", output)
             self.assertEqual(remote_path.read_text(encoding="utf-8"), original_remote_text)
+
+    def test_sync_treats_title_only_same_id_difference_as_equivalent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            sync_dir = root / "sync"
+            local_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sync_dir.mkdir()
+            local_day.mkdir(parents=True)
+            session_id = "73737373-7373-7373-7373-737373737373"
+            local_path = local_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            remote_path = sync_dir / f"2026-04-30--Remote-title--{session_id}.jsonl"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Local title"}],
+            )
+            write_jsonl(
+                local_path,
+                [
+                    import_title_record(session_id, "Local title", "2026-04-30T18:20:39Z"),
+                    import_user_message("same history", "2026-04-30T18:21:39Z"),
+                ],
+            )
+            write_jsonl(
+                remote_path,
+                [
+                    import_title_record(session_id, "Remote title", "2026-04-30T18:20:39Z"),
+                    import_user_message("same history", "2026-04-30T18:21:39Z"),
+                ],
+            )
+            original_local_text = local_path.read_text(encoding="utf-8")
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["sync", "--codex-home", str(codex_home), str(sync_dir)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("Skipped (equivalent): 1", output)
+            self.assertIn("Same-ID conflicts: 0", output)
+            self.assertEqual(local_path.read_text(encoding="utf-8"), original_local_text)
+
+    def test_sync_fast_forwards_same_id_session_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            sync_dir = root / "sync"
+            local_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sync_dir.mkdir()
+            local_day.mkdir(parents=True)
+            session_id = "74747474-7474-7474-7474-747474747474"
+            local_path = local_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            remote_path = sync_dir / f"2026-04-30--Remote-ahead--{session_id}.jsonl"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Local title"}],
+            )
+            write_jsonl(
+                local_path,
+                [
+                    import_title_record(session_id, "Local title", "2026-04-30T18:20:39Z"),
+                    import_user_message("common history", "2026-04-30T18:21:39Z"),
+                ],
+            )
+            write_jsonl(
+                remote_path,
+                [
+                    import_title_record(session_id, "Remote ahead", "2026-04-30T18:20:39Z"),
+                    import_user_message("common history", "2026-04-30T18:21:39Z"),
+                    import_user_message("incoming tail", "2026-04-30T18:22:39Z"),
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["sync", "--codex-home", str(codex_home), str(sync_dir)])
+
+            output = buffer.getvalue()
+            local_records = read_jsonl(local_path)
+            index_records = read_jsonl(codex_home / "session_index.jsonl")
+            self.assertEqual(result, 0)
+            self.assertIn("Fast-forwarded locally: 1", output)
+            self.assertIn("Same-ID conflicts: 0", output)
+            self.assertEqual(local_records[-1]["payload"]["content"], "incoming tail")
+            self.assertEqual(index_records[0]["thread_name"], "Remote ahead")
 
 
 if __name__ == "__main__":

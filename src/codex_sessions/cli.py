@@ -94,6 +94,7 @@ STYLE_ATTENTION = "bold bright_yellow"
 STYLE_ERROR = "bold bright_red"
 STYLE_HEADING = "bold bright_blue"
 STYLE_LABEL = "bright_blue"
+STYLE_NEUTRAL_HEADING = "bold"
 STYLE_SECONDARY = "bright_black"
 STYLE_SUCCESS = "bright_green"
 STYLE_SUCCESS_STRONG = "bold bright_green"
@@ -118,6 +119,10 @@ def count_text(prefix: str, count: int, *, style: str = "") -> Text:
     append_cli_text(rendered, prefix, sys.stdout.encoding, style=style)
     append_cli_text(rendered, count, sys.stdout.encoding, style=f"bold {style}".strip())
     return rendered
+
+
+def style_if_nonzero(count: int, style: str) -> str:
+    return style if count else ""
 
 
 def run_list_command(args: argparse.Namespace) -> int:
@@ -405,7 +410,10 @@ def retry_state_cache_reset_interactively(codex_home: Path) -> None:
     while True:
         print_cli_line()
         print_cli_line(
-            "Close all Codex sessions and retry. Or skip and run 'codex-sessions reset-state-cache' later.",
+            (
+                "Close all Codex sessions and retry. Or skip and run "
+                "'codex-sessions reset-state-cache' later."
+            ),
             style=STYLE_ATTENTION,
         )
         if not prompt_retry_state_cache_reset():
@@ -698,7 +706,7 @@ def format_import_plan_lines(plan: ImportSessionPlan) -> list[CliLine]:
 
 def format_import_skipped_lines(skipped: ImportSkippedSession) -> list[CliLine]:
     return [
-        cli_text(f"SKIPPED (identical) {skipped.session_id}", style=STYLE_LABEL),
+        cli_text(f"SKIPPED (identical) {skipped.session_id}", style=STYLE_NEUTRAL_HEADING),
         *path_block_lines("Existing", skipped.existing_path, indent="  "),
         *path_block_lines("Import", skipped.source_path, indent="  "),
         *labeled_lines([("Fingerprint", format_fingerprint(skipped.fingerprint))], indent="  "),
@@ -707,7 +715,7 @@ def format_import_skipped_lines(skipped: ImportSkippedSession) -> list[CliLine]:
 
 def format_import_history_skip_lines(skipped: ImportSkippedHistory, reason: str) -> list[CliLine]:
     return [
-        cli_text(f"SKIPPED ({reason}) {skipped.session_id}", style=STYLE_LABEL),
+        cli_text(f"SKIPPED ({reason}) {skipped.session_id}", style=STYLE_NEUTRAL_HEADING),
         *labeled_lines(
             [
                 ("Common records", skipped.common_comparable_records),
@@ -743,7 +751,7 @@ def format_import_side_lines(
     tail_records: int | None = None,
 ) -> list[CliLine]:
     heading = Text()
-    append_cli_text(heading, f"  {label}: ", sys.stdout.encoding, style=STYLE_LABEL)
+    append_cli_text(heading, f"  {label}: ", sys.stdout.encoding)
     heading.append_text(
         styled_session_display_text(import_side_display_info(side), sys.stdout.encoding)
     )
@@ -915,6 +923,7 @@ def format_import_sessions_plan_lines(
     plan: ImportSessionsPlan,
     *,
     show_divergence: bool = False,
+    include_counts: bool = True,
 ) -> list[CliLine]:
     if (
         len(plan.import_plans) == 1
@@ -930,17 +939,31 @@ def format_import_sessions_plan_lines(
     ):
         return format_import_plan_lines(plan.import_plans[0])
 
-    lines: list[CliLine] = [
-        count_text("Would import: ", len(plan.import_plans), style=STYLE_LABEL),
-        count_text("Would fast-forward: ", len(plan.fast_forward_plans), style=STYLE_LABEL),
-        count_text("Skipped (identical): ", len(plan.skipped), style=STYLE_LABEL),
-        count_text("Skipped (equivalent): ", len(plan.skipped_equivalent), style=STYLE_LABEL),
-        count_text("Skipped (local ahead): ", len(plan.skipped_local_ahead), style=STYLE_LABEL),
-        count_text("Duplicates: ", len(plan.duplicates), style=STYLE_ATTENTION),
-        count_text("ID conflicts: ", len(plan.conflicts), style=STYLE_ATTENTION),
-        count_text("Diverged conflicts: ", len(plan.diverged), style=STYLE_ATTENTION),
-        count_text("Failed: ", len(plan.failures), style=STYLE_ERROR),
-    ]
+    lines: list[CliLine] = []
+    if include_counts:
+        lines.extend(
+            [
+                count_text("Would import: ", len(plan.import_plans), style=STYLE_LABEL),
+                count_text(
+                    "Would fast-forward: ",
+                    len(plan.fast_forward_plans),
+                    style=STYLE_LABEL,
+                ),
+                count_text("Skipped (identical): ", len(plan.skipped)),
+                count_text(
+                    "Skipped (equivalent): ",
+                    len(plan.skipped_equivalent),
+                ),
+                count_text(
+                    "Skipped (local ahead): ",
+                    len(plan.skipped_local_ahead),
+                ),
+                count_text("Duplicates: ", len(plan.duplicates), style=STYLE_ATTENTION),
+                count_text("ID conflicts: ", len(plan.conflicts), style=STYLE_ATTENTION),
+                count_text("Diverged conflicts: ", len(plan.diverged), style=STYLE_ATTENTION),
+                count_text("Failed: ", len(plan.failures), style=STYLE_ERROR),
+            ]
+        )
     if plan.warnings:
         lines.append(cli_text("Warnings:", style=STYLE_ATTENTION))
         for warning in plan.warnings:
@@ -982,15 +1005,15 @@ def format_import_sessions_plan_lines(
             cli_text("State cache reset required after fast-forward.", style=STYLE_ATTENTION)
         )
     if plan.skipped:
-        lines.append(cli_text("Skipped (identical) sessions:", style=STYLE_HEADING))
+        lines.append(cli_text("Skipped (identical) sessions:", style=STYLE_NEUTRAL_HEADING))
         for identical_skip in plan.skipped:
             lines.extend(format_import_skipped_lines(identical_skip))
     if plan.skipped_equivalent:
-        lines.append(cli_text("Skipped (equivalent) sessions:", style=STYLE_HEADING))
+        lines.append(cli_text("Skipped (equivalent) sessions:", style=STYLE_NEUTRAL_HEADING))
         for equivalent_skip in plan.skipped_equivalent:
             lines.extend(format_import_history_skip_lines(equivalent_skip, "equivalent"))
     if plan.skipped_local_ahead:
-        lines.append(cli_text("Skipped (local ahead) sessions:", style=STYLE_HEADING))
+        lines.append(cli_text("Skipped (local ahead) sessions:", style=STYLE_NEUTRAL_HEADING))
         for local_ahead_skip in plan.skipped_local_ahead:
             lines.extend(format_import_history_skip_lines(local_ahead_skip, "local ahead"))
     if plan.duplicates:
@@ -1019,21 +1042,7 @@ def format_import_sessions_plan_lines(
 
 
 def format_sync_export_plan_lines(plan: ExportSessionsPlan) -> list[CliLine]:
-    lines: list[CliLine] = [
-        count_text(
-            "Would export local-only sessions: ",
-            len(plan.session_plans),
-            style=STYLE_LABEL,
-        )
-    ]
-    if plan.filtered_out_count:
-        lines.append(
-            count_text(
-                "Already in sync folder: ",
-                plan.filtered_out_count,
-                style=STYLE_SECONDARY,
-            )
-        )
+    lines = format_sync_export_summary_lines(plan, dry_run=True)
     lines.extend(path_block_lines("Sync folder", plan.output_path))
     if not plan.session_plans:
         lines.append(cli_text("No local-only sessions to export.", style=STYLE_SECONDARY))
@@ -1057,6 +1066,128 @@ def format_sync_export_plan_lines(plan: ExportSessionsPlan) -> list[CliLine]:
     return lines
 
 
+def sync_import_discovered_count(plan: ImportSessionsPlan) -> int:
+    return (
+        len(plan.import_plans)
+        + len(plan.fast_forward_plans)
+        + len(plan.skipped)
+        + len(plan.skipped_equivalent)
+        + len(plan.skipped_local_ahead)
+        + len(plan.duplicates)
+        + len(plan.conflicts)
+        + len(plan.diverged)
+        + len(plan.failures)
+    )
+
+
+def sync_import_not_added_count(plan: ImportSessionsPlan) -> int:
+    return (
+        len(plan.skipped)
+        + len(plan.skipped_equivalent)
+        + len(plan.skipped_local_ahead)
+        + len(plan.duplicates)
+        + len(plan.conflicts)
+        + len(plan.diverged)
+        + len(plan.failures)
+    )
+
+
+def format_sync_import_summary_lines(
+    plan: ImportSessionsPlan,
+    *,
+    dry_run: bool,
+) -> list[CliLine]:
+    add_label = "Would add locally: " if dry_run else "Added locally: "
+    fast_forward_label = "Would fast-forward locally: " if dry_run else "Fast-forwarded locally: "
+    not_added_label = "Would not import: " if dry_run else "Not imported: "
+    return [
+        cli_text("Download summary:", style=STYLE_NEUTRAL_HEADING),
+        count_text(
+            "Sync-folder sessions discovered: ",
+            sync_import_discovered_count(plan),
+        ),
+        cli_text(""),
+        count_text(
+            add_label,
+            len(plan.import_plans),
+            style=style_if_nonzero(len(plan.import_plans), STYLE_SUCCESS),
+        ),
+        count_text(
+            fast_forward_label,
+            len(plan.fast_forward_plans),
+            style=style_if_nonzero(len(plan.fast_forward_plans), STYLE_SUCCESS),
+        ),
+        cli_text(""),
+        count_text(not_added_label, sync_import_not_added_count(plan)),
+        count_text("Skipped (identical): ", len(plan.skipped), style=STYLE_SECONDARY),
+        count_text(
+            "Skipped (equivalent): ",
+            len(plan.skipped_equivalent),
+            style=STYLE_SECONDARY,
+        ),
+        count_text(
+            "Skipped (local ahead): ",
+            len(plan.skipped_local_ahead),
+            style=STYLE_SECONDARY,
+        ),
+        count_text(
+            "Duplicate input IDs: ",
+            len(plan.duplicates),
+            style=style_if_nonzero(len(plan.duplicates), STYLE_ATTENTION),
+        ),
+        count_text(
+            "Same-ID conflicts: ",
+            len(plan.conflicts),
+            style=style_if_nonzero(len(plan.conflicts), STYLE_ATTENTION),
+        ),
+        count_text(
+            "Diverged histories: ",
+            len(plan.diverged),
+            style=style_if_nonzero(len(plan.diverged), STYLE_ATTENTION),
+        ),
+        count_text(
+            "Failed: ",
+            len(plan.failures),
+            style=style_if_nonzero(len(plan.failures), STYLE_ERROR),
+        ),
+    ]
+
+
+def sync_export_discovered_count(plan: ExportSessionsPlan) -> int:
+    return len(plan.session_plans) + plan.filtered_out_count
+
+
+def format_sync_export_summary_lines(
+    plan: ExportSessionsPlan,
+    *,
+    dry_run: bool,
+) -> list[CliLine]:
+    export_label = (
+        "Would export local-only sessions: " if dry_run else "Exported local-only sessions: "
+    )
+    not_uploaded_label = "Would not upload: " if dry_run else "Not uploaded: "
+    return [
+        cli_text("Upload summary:", style=STYLE_NEUTRAL_HEADING),
+        count_text(
+            "Local sessions discovered: ",
+            sync_export_discovered_count(plan),
+        ),
+        cli_text(""),
+        count_text(
+            export_label,
+            len(plan.session_plans),
+            style=style_if_nonzero(len(plan.session_plans), STYLE_SUCCESS),
+        ),
+        cli_text(""),
+        count_text(not_uploaded_label, plan.filtered_out_count),
+        count_text(
+            "Session ID already in sync folder: ",
+            plan.filtered_out_count,
+            style=STYLE_SECONDARY,
+        ),
+    ]
+
+
 def format_sync_plan_lines(
     plan: SyncSessionsPlan,
     *,
@@ -1067,9 +1198,12 @@ def format_sync_plan_lines(
         *path_block_lines("Path", plan.sync_dir, indent="  "),
         cli_text(""),
         cli_text("Download from sync folder:", style=STYLE_HEADING),
+        *format_sync_import_summary_lines(plan.import_plan, dry_run=True),
+        cli_text(""),
         *format_import_sessions_plan_lines(
             plan.import_plan,
             show_divergence=show_divergence,
+            include_counts=False,
         ),
         cli_text(""),
         cli_text("Upload to sync folder:", style=STYLE_HEADING),
@@ -1128,13 +1262,13 @@ def print_import_plan_rows(
 
 
 def print_import_result_summary(plan: ImportSessionsPlan) -> None:
-    print_cli_line("Summary:", style=STYLE_HEADING)
+    print_cli_line("Summary:", style=STYLE_NEUTRAL_HEADING)
     summary_lines: tuple[tuple[str, int, str], ...] = (
         ("Sessions added: ", len(plan.import_plans), STYLE_SUCCESS),
         ("Fast-forwarded: ", len(plan.fast_forward_plans), STYLE_SUCCESS),
-        ("Skipped (identical): ", len(plan.skipped), STYLE_LABEL),
-        ("Skipped (equivalent): ", len(plan.skipped_equivalent), STYLE_LABEL),
-        ("Skipped (local ahead): ", len(plan.skipped_local_ahead), STYLE_LABEL),
+        ("Skipped (identical): ", len(plan.skipped), ""),
+        ("Skipped (equivalent): ", len(plan.skipped_equivalent), ""),
+        ("Skipped (local ahead): ", len(plan.skipped_local_ahead), ""),
         ("Duplicates: ", len(plan.duplicates), STYLE_ATTENTION),
         ("ID conflicts: ", len(plan.conflicts), STYLE_ATTENTION),
         ("Diverged conflicts: ", len(plan.diverged), STYLE_ATTENTION),
@@ -1150,6 +1284,7 @@ def print_import_sessions_result(
     result: ImportSessionsResult,
     *,
     show_divergence: bool = False,
+    print_summary: bool = True,
 ) -> None:
     plan = result.plan
     if (
@@ -1184,15 +1319,15 @@ def print_import_sessions_result(
         style=STYLE_SUCCESS_STRONG,
     )
     if plan.skipped:
-        print_cli_line("Skipped (identical) sessions:", style=STYLE_LABEL)
+        print_cli_line("Skipped (identical) sessions:", style=STYLE_NEUTRAL_HEADING)
         for skipped in plan.skipped:
             print_encoded_lines(format_import_skipped_lines(skipped))
     if plan.skipped_equivalent:
-        print_cli_line("Skipped (equivalent) sessions:", style=STYLE_LABEL)
+        print_cli_line("Skipped (equivalent) sessions:", style=STYLE_NEUTRAL_HEADING)
         for history_skip in plan.skipped_equivalent:
             print_encoded_lines(format_import_history_skip_lines(history_skip, "equivalent"))
     if plan.skipped_local_ahead:
-        print_cli_line("Skipped (local ahead) sessions:", style=STYLE_LABEL)
+        print_cli_line("Skipped (local ahead) sessions:", style=STYLE_NEUTRAL_HEADING)
         for history_skip in plan.skipped_local_ahead:
             print_encoded_lines(format_import_history_skip_lines(history_skip, "local ahead"))
     if plan.duplicates:
@@ -1236,7 +1371,8 @@ def print_import_sessions_result(
         )
     ):
         print_cli_line()
-    print_import_result_summary(plan)
+    if print_summary:
+        print_import_result_summary(plan)
 
 
 def run_import_command(args: argparse.Namespace) -> int:
@@ -1297,22 +1433,12 @@ def run_import_command(args: argparse.Namespace) -> int:
 
 
 def print_sync_export_result(plan: ExportSessionsPlan) -> None:
-    print_cli_line(
-        count_text(
-            "Exported local-only sessions: ",
-            len(plan.session_plans),
-            style=STYLE_SUCCESS,
-        )
-    )
-    if plan.filtered_out_count:
-        print_cli_line(
-            count_text(
-                "Already in sync folder: ",
-                plan.filtered_out_count,
-                style=STYLE_SECONDARY,
-            )
-        )
+    print_cli_lines(format_sync_export_summary_lines(plan, dry_run=False))
     print_encoded_lines(path_block_lines("Sync folder", plan.output_path))
+
+
+def print_sync_import_summary(plan: ImportSessionsPlan) -> None:
+    print_cli_lines(format_sync_import_summary_lines(plan, dry_run=False))
 
 
 def print_sync_sessions_result(
@@ -1324,27 +1450,36 @@ def print_sync_sessions_result(
 ) -> None:
     print_cli_line("Sync folder:", style=STYLE_HEADING)
     print_encoded_lines(path_block_lines("Path", result.plan.sync_dir, indent="  "))
+    should_print_state_cache_status = result.import_result is not None and (
+        result.plan.import_plan.import_plans or result.plan.import_plan.fast_forward_plans
+    )
     if import_plan_has_output(result.plan.import_plan):
         print_cli_line()
         print_cli_line("Download from sync folder:", style=STYLE_HEADING)
         if result.import_result is not None:
-            print_import_sessions_result(result.import_result, show_divergence=show_divergence)
-            if result.plan.import_plan.import_plans or result.plan.import_plan.fast_forward_plans:
-                print_mutation_state_cache_status(
-                    codex_home,
-                    result.import_result.state_cache_backups,
-                    result.import_result.state_cache_reset_error,
-                    result.import_result.state_cache_reset_skipped,
-                    non_interactive=non_interactive,
-                )
+            print_import_sessions_result(
+                result.import_result,
+                show_divergence=show_divergence,
+                print_summary=False,
+            )
+            print_sync_import_summary(result.plan.import_plan)
     else:
         print_cli_line()
         print_cli_line("Download from sync folder:", style=STYLE_HEADING)
         print_cli_line("No sync-folder sessions to import.", style=STYLE_SECONDARY)
+        print_sync_import_summary(result.plan.import_plan)
 
     print_cli_line()
     print_cli_line("Upload to sync folder:", style=STYLE_HEADING)
     print_sync_export_result(result.plan.export_plan)
+    if should_print_state_cache_status and result.import_result is not None:
+        print_mutation_state_cache_status(
+            codex_home,
+            result.import_result.state_cache_backups,
+            result.import_result.state_cache_reset_error,
+            result.import_result.state_cache_reset_skipped,
+            non_interactive=non_interactive,
+        )
 
 
 def run_sync_command(args: argparse.Namespace) -> int:
@@ -1365,7 +1500,6 @@ def run_sync_command(args: argparse.Namespace) -> int:
                 codex_home=codex_home,
                 session_index_path=session_index_path,
                 sessions_dir=sessions_dir,
-                merge=args.merge,
                 persist_local_fingerprint_cache=False,
             )
         except (CliError, ValueError) as exc:
@@ -1379,7 +1513,6 @@ def run_sync_command(args: argparse.Namespace) -> int:
             codex_home=codex_home,
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
-            merge=args.merge,
             reset_state_cache=not args.no_reset_state_cache,
         )
     except (CliError, ValueError, OSError) as exc:

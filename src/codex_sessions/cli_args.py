@@ -374,11 +374,6 @@ def parse_sync_args(
         help="Show the sync plan without modifying Codex home or the sync folder.",
     )
     parser.add_argument(
-        "--merge",
-        action="store_true",
-        help="Fast-forward local sessions when sync-folder rollout history is safely ahead.",
-    )
-    parser.add_argument(
         "--show-divergence",
         action="store_true",
         help="Show a compact preview of the first differing records for diverged imports.",

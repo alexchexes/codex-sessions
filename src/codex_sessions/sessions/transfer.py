@@ -1832,7 +1832,6 @@ def plan_sync_import(
     session_index_path: Path | None,
     sessions_dir: Path | None,
     *,
-    merge: bool,
     persist_local_fingerprint_cache: bool,
 ) -> ImportSessionsPlan:
     if not sync_dir.exists():
@@ -1845,7 +1844,7 @@ def plan_sync_import(
             codex_home=codex_home,
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
-            merge=merge,
+            merge=True,
             persist_local_fingerprint_cache=persist_local_fingerprint_cache,
         )
     except CliError as exc:
@@ -1861,7 +1860,6 @@ def plan_sessions_sync(
     session_index_path: Path | None = None,
     sessions_dir: Path | None = None,
     *,
-    merge: bool = False,
     persist_local_fingerprint_cache: bool = True,
 ) -> SyncSessionsPlan:
     resolved_sync_dir = sync_dir.expanduser().resolve()
@@ -1870,7 +1868,6 @@ def plan_sessions_sync(
         codex_home,
         session_index_path,
         sessions_dir,
-        merge=merge,
         persist_local_fingerprint_cache=persist_local_fingerprint_cache,
     )
     export_plan = plan_missing_sessions_export_to_directory(
@@ -1893,7 +1890,6 @@ def sync_sessions(
     session_index_path: Path | None = None,
     sessions_dir: Path | None = None,
     *,
-    merge: bool = False,
     reset_state_cache: bool = True,
 ) -> SyncSessionsResult:
     plan = plan_sessions_sync(
@@ -1901,7 +1897,6 @@ def sync_sessions(
         codex_home=codex_home,
         session_index_path=session_index_path,
         sessions_dir=sessions_dir,
-        merge=merge,
         persist_local_fingerprint_cache=False,
     )
     import_result = None
@@ -1911,7 +1906,7 @@ def sync_sessions(
             codex_home=codex_home,
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
-            merge=merge,
+            merge=True,
             reset_state_cache=reset_state_cache,
         )
     else:
