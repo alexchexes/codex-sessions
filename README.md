@@ -110,6 +110,8 @@ The converter target can be:
 - exact title: `"Fix schema mismatch for enums"`
 - `latest` - the session whose rollout contains the most recent record timestamp.
   If rollout timestamps are unavailable, falls back to file modified time.
+  The lookup reuses the session metadata cache, refreshing incomplete entries
+  and entries whose rollout size or modified time changed.
 
 #### Raw JSONL to YAML
 

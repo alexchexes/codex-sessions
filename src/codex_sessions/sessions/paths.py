@@ -1,8 +1,18 @@
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from codex_sessions.errors import CliError
+from codex_sessions.sessions.cache import (
+    cached_session_metadata,
+    prune_missing_session_cache_entries,
+    read_session_cache,
+    session_cache_entry,
+    session_cache_key,
+    session_cache_path,
+    write_session_cache,
+)
 from codex_sessions.sessions.files import (
     discover_session_files,
     discover_session_paths,
@@ -16,6 +26,7 @@ from codex_sessions.sessions.index import (
     session_index_record_id,
     session_index_records,
 )
+from codex_sessions.sessions.rollout import FileFingerprint
 
 LATEST_TARGET = "latest"
 
@@ -24,6 +35,13 @@ LATEST_TARGET = "latest"
 class ConversionInput:
     path: Path
     output_stem: str | None
+
+
+@dataclass(frozen=True)
+class LatestSessionSortResult:
+    sort_key: tuple[int, float]
+    cache_key: str
+    cache_entry: dict[str, Any] | None
 
 
 def normalize_output_format(output_format: str | None) -> str | None:
@@ -113,15 +131,79 @@ def resolve_latest_session(codex_home: Path) -> Path:
     matches = discover_session_paths(sessions_dir)
     if not matches:
         raise CliError("No Codex session rollout files found.")
-    return max(matches, key=latest_session_sort_key).resolve()
+
+    metadata_cache_path = session_cache_path(codex_home)
+    metadata_cache_entries = read_session_cache(metadata_cache_path)
+    metadata_cache_dirty = prune_missing_session_cache_entries(metadata_cache_entries)
+    latest_path: Path | None = None
+    latest_key: tuple[int, float] | None = None
+
+    for path in matches:
+        result = latest_session_sort_result(path, metadata_cache_entries)
+        if result.cache_entry is not None:
+            metadata_cache_entries[result.cache_key] = result.cache_entry
+            metadata_cache_dirty = True
+        if latest_key is None or result.sort_key > latest_key:
+            latest_path = path
+            latest_key = result.sort_key
+
+    if metadata_cache_dirty:
+        try:
+            write_session_cache(metadata_cache_path, metadata_cache_entries)
+        except OSError:
+            pass
+
+    assert latest_path is not None
+    return latest_path.resolve()
 
 
 def latest_session_sort_key(path: Path) -> tuple[int, float]:
-    _, started_at, ended_at = session_file_metadata(path, include_ended_at=True)
+    return latest_session_sort_result(path, None).sort_key
+
+
+def latest_session_sort_result(
+    path: Path, metadata_cache_entries: dict[str, Any] | None
+) -> LatestSessionSortResult:
+    stat_result = path.stat()
+    cache_key = session_cache_key(path)
+    metadata = (
+        cached_session_metadata(metadata_cache_entries.get(cache_key), path, stat_result)
+        if metadata_cache_entries is not None
+        else None
+    )
+    if metadata is not None:
+        if metadata.ended_at is not None or metadata.timestamps_scanned:
+            timestamp = metadata.ended_at or metadata.started_at
+            if timestamp is not None:
+                return LatestSessionSortResult((1, timestamp.timestamp()), cache_key, None)
+            return LatestSessionSortResult((0, stat_result.st_mtime), cache_key, None)
+
+    fingerprint = (
+        FileFingerprint(size=metadata.size, sha256=metadata.sha256)
+        if metadata is not None and metadata.sha256 is not None
+        else None
+    )
+    session_id, started_at, ended_at = session_file_metadata(path, include_ended_at=True)
     timestamp = ended_at or started_at
+    updated_stat_result = path.stat()
+    cache_entry = None
+    if (
+        metadata_cache_entries is not None
+        and updated_stat_result.st_size == stat_result.st_size
+        and updated_stat_result.st_mtime_ns == stat_result.st_mtime_ns
+    ):
+        cache_entry = session_cache_entry(
+            path,
+            updated_stat_result,
+            session_id=session_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            timestamps_scanned=True,
+            fingerprint=fingerprint,
+        )
     if timestamp is not None:
-        return 1, timestamp.timestamp()
-    return 0, path.stat().st_mtime
+        return LatestSessionSortResult((1, timestamp.timestamp()), cache_key, cache_entry)
+    return LatestSessionSortResult((0, updated_stat_result.st_mtime), cache_key, cache_entry)
 
 
 def looks_like_missing_file_path(raw_input: Path) -> bool:

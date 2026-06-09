@@ -23,6 +23,7 @@ class SessionCacheEntry:
     thread_name: str | None
     started_at: datetime | None
     ended_at: datetime | None
+    timestamps_scanned: bool
 
 
 def session_cache_path(codex_home: Path) -> Path:
@@ -88,6 +89,9 @@ def cached_session_metadata(
     thread_name = entry.get("thread_name")
     if thread_name is not None and not isinstance(thread_name, str):
         return None
+    timestamps_scanned = entry.get("timestamps_scanned", False)
+    if not isinstance(timestamps_scanned, bool):
+        return None
 
     return SessionCacheEntry(
         path=path.resolve(),
@@ -98,6 +102,7 @@ def cached_session_metadata(
         thread_name=thread_name,
         started_at=parse_timestamp(entry.get("started_at")),
         ended_at=parse_timestamp(entry.get("ended_at")),
+        timestamps_scanned=timestamps_scanned,
     )
 
 
@@ -117,6 +122,7 @@ def session_cache_entry(
     thread_name: str | None = None,
     started_at: datetime | None = None,
     ended_at: datetime | None = None,
+    timestamps_scanned: bool = False,
     fingerprint: FileFingerprint | None = None,
 ) -> dict[str, Any]:
     return {
@@ -128,6 +134,7 @@ def session_cache_entry(
         "thread_name": thread_name,
         "started_at": started_at.isoformat() if started_at else None,
         "ended_at": ended_at.isoformat() if ended_at else None,
+        "timestamps_scanned": timestamps_scanned,
     }
 
 
@@ -145,6 +152,7 @@ def session_cache_entry_from_document(
         thread_name=document.thread_name,
         started_at=document.started_at,
         ended_at=document.ended_at,
+        timestamps_scanned=True,
         fingerprint=fingerprint,
     )
 
@@ -185,6 +193,7 @@ def file_fingerprint_from_session_cache(
             thread_name=metadata.thread_name if metadata is not None else None,
             started_at=metadata.started_at if metadata is not None else None,
             ended_at=metadata.ended_at if metadata is not None else None,
+            timestamps_scanned=metadata.timestamps_scanned if metadata is not None else False,
             fingerprint=fingerprint,
         )
     return fingerprint, updated_stat_result, entries is not None

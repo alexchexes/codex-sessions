@@ -89,6 +89,7 @@ class SessionCacheTests(unittest.TestCase):
             self.assertEqual(cached_entry.session_id, document.session_id)
             self.assertEqual(cached_entry.thread_name, document.thread_name)
             self.assertEqual(cached_entry.started_at, document.started_at)
+            self.assertTrue(cached_entry.timestamps_scanned)
             self.assertEqual(cached_file_fingerprint(entry, rollout_path, stat_result), fingerprint)
             self.assertEqual(session_cache_key(rollout_path), session_cache_key(rollout_path))
 
@@ -115,6 +116,16 @@ class SessionCacheTests(unittest.TestCase):
             self.assertIsNone(
                 cached_session_metadata({**entry, "sha256": "not-a-sha"}, rollout_path, stat_result)
             )
+            self.assertIsNone(
+                cached_session_metadata(
+                    {**entry, "timestamps_scanned": "yes"}, rollout_path, stat_result
+                )
+            )
+
+            cached_entry = cached_session_metadata(entry, rollout_path, stat_result)
+            self.assertIsNotNone(cached_entry)
+            assert cached_entry is not None
+            self.assertFalse(cached_entry.timestamps_scanned)
 
     def test_file_fingerprint_from_session_cache_reuses_cached_sha(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
