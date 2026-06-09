@@ -42,12 +42,12 @@ def is_windows_pipe_stream(stream: TextIO) -> bool:
         import ctypes
         import msvcrt
 
-        handle = msvcrt.get_osfhandle(stream.fileno())
+        handle = msvcrt.get_osfhandle(stream.fileno())  # type: ignore[attr-defined]
     except (AttributeError, OSError, ValueError):
         return False
     if handle == -1:
         return False
-    file_type = ctypes.windll.kernel32.GetFileType(handle)
+    file_type = ctypes.windll.kernel32.GetFileType(handle)  # type: ignore[attr-defined]
     return bool(file_type == 0x0003)
 
 

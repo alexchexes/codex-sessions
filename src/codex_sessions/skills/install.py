@@ -1,10 +1,15 @@
 import os
 import shutil
+import sys
 from dataclasses import dataclass
 from importlib import resources
-from importlib.abc import Traversable
 from pathlib import Path
 from typing import TypeAlias
+
+if sys.version_info >= (3, 11):
+    from importlib.resources.abc import Traversable
+else:
+    from importlib.abc import Traversable
 
 from codex_sessions.errors import CliError
 

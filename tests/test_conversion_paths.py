@@ -74,7 +74,7 @@ class ConversionPathsTests(unittest.TestCase):
             )
             self.assertEqual(
                 resolve_output_path(output_dir, input_path, codex_home, "md", "abc"),
-                output_dir / "abc.md",
+                (output_dir / "abc.md").resolve(),
             )
 
     def test_resolve_conversion_input_reports_missing_file_without_stack_trace(self) -> None:

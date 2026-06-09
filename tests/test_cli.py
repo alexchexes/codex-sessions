@@ -649,7 +649,7 @@ class CliTests(unittest.TestCase):
 
             output_path = resolve_output_path(output_dir, input_path, codex_home, "yaml", "abc")
 
-            self.assertEqual(output_path, output_dir / "abc.yaml")
+            self.assertEqual(output_path, (output_dir / "abc.yaml").resolve())
 
     def test_missing_input_exits_without_creating_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -4458,7 +4458,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(
             str(raised.exception),
-            "session_index.jsonl not found: " + str(codex_home / "session_index.jsonl"),
+            "session_index.jsonl not found: " + str((codex_home / "session_index.jsonl").resolve()),
         )
 
     def test_find_searches_indexed_session_titles(self) -> None:
