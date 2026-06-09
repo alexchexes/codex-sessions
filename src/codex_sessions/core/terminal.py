@@ -1,6 +1,6 @@
 import os
-from collections.abc import Mapping
-from typing import TextIO
+from collections.abc import Callable, Mapping
+from typing import TextIO, cast
 
 from rich.console import Console
 
@@ -42,12 +42,26 @@ def is_windows_pipe_stream(stream: TextIO) -> bool:
         import ctypes
         import msvcrt
 
-        handle = msvcrt.get_osfhandle(stream.fileno())  # type: ignore[attr-defined]
+        get_osfhandle = cast(
+            "Callable[[int], int] | None",
+            getattr(msvcrt, "get_osfhandle", None),
+        )
+        if get_osfhandle is None:
+            return False
+        handle = get_osfhandle(stream.fileno())
     except (AttributeError, OSError, ValueError):
         return False
     if handle == -1:
         return False
-    file_type = ctypes.windll.kernel32.GetFileType(handle)  # type: ignore[attr-defined]
+    windll = getattr(ctypes, "windll", None)
+    kernel32 = getattr(windll, "kernel32", None)
+    get_file_type = cast(
+        "Callable[[int], int] | None",
+        getattr(kernel32, "GetFileType", None),
+    )
+    if get_file_type is None:
+        return False
+    file_type = get_file_type(handle)
     return bool(file_type == 0x0003)
 
 
