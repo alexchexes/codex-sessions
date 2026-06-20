@@ -11,6 +11,7 @@ from rich.text import Text
 
 from codex_sessions.cli_args import (
     cli_prog_from_argv0,
+    default_codex_home,
     parse_args,
     parse_export_args,
     parse_import_args,
@@ -471,9 +472,13 @@ def run_reset_state_cache_command(args: argparse.Namespace) -> int:
 
 
 def run_install_skill_command(args: argparse.Namespace) -> int:
-    codex_home = args.codex_home.expanduser().resolve()
+    skills_dir = args.skills_dir.expanduser().resolve()
+    previous_skills_dir = default_codex_home().expanduser().resolve() / "skills"
     try:
-        result = install_codex_skill(codex_home)
+        result = install_codex_skill(
+            skills_dir,
+            previous_skills_dir=previous_skills_dir,
+        )
     except CliError as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -486,12 +491,18 @@ def run_install_skill_command(args: argparse.Namespace) -> int:
         ],
         indent="  ",
     )
-    if result.removed_legacy_path is not None:
+    if result.removed_obsolete_paths:
         print_labeled_text_lines(
-            [("Removed old skill", result.removed_legacy_path, STYLE_SECONDARY)],
+            [
+                ("Removed old skill", path, STYLE_SECONDARY)
+                for path in result.removed_obsolete_paths
+            ],
             indent="  ",
         )
-    print_cli_line("Restart Codex to refresh available skills.", style=STYLE_ATTENTION)
+    print_cli_line(
+        "Codex detects skill changes automatically; restart if it does not appear.",
+        style=STYLE_ATTENTION,
+    )
     return 0
 
 

@@ -73,16 +73,18 @@ class CliTests(unittest.TestCase):
 
     def test_install_skill_command_installs_codex_sessions_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            codex_home = Path(tmpdir)
+            root = Path(tmpdir)
+            codex_home = root / ".codex"
+            skills_dir = root / ".agents" / "skills"
             legacy_skill = codex_home / "skills" / "read-codex-session"
             legacy_skill.mkdir(parents=True)
             legacy_skill.joinpath("SKILL.md").write_text("old skill", encoding="utf-8")
 
             buffer = StringIO()
-            with redirect_stdout(buffer):
-                result = main(["install-skill", "--codex-home", str(codex_home)])
+            with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), redirect_stdout(buffer):
+                result = main(["install-skill", "--skills-dir", str(skills_dir)])
 
-            installed_skill = codex_home / "skills" / "codex-sessions"
+            installed_skill = skills_dir / "codex-sessions"
             output = buffer.getvalue()
             self.assertEqual(result, 0)
             self.assertTrue(installed_skill.joinpath("SKILL.md").is_file())

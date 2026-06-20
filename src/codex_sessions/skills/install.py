@@ -22,20 +22,21 @@ class InstallSkillResult:
     skill_name: str
     destination: Path
     replaced_existing: bool
-    removed_legacy_path: Path | None
+    removed_obsolete_paths: tuple[Path, ...]
 
 
 SkillSource: TypeAlias = Path | Traversable
 
 
-def install_codex_skill(codex_home: Path) -> InstallSkillResult:
-    skills_root = codex_home / "skills"
-    destination = skills_root / SKILL_NAME
-    temp_destination = skills_root / f".{SKILL_NAME}.tmp-{os.getpid()}"
+def install_codex_skill(
+    skills_dir: Path, *, previous_skills_dir: Path | None = None
+) -> InstallSkillResult:
+    destination = skills_dir / SKILL_NAME
+    temp_destination = skills_dir / f".{SKILL_NAME}.tmp-{os.getpid()}"
     source = bundled_skill_source()
 
     try:
-        skills_root.mkdir(parents=True, exist_ok=True)
+        skills_dir.mkdir(parents=True, exist_ok=True)
         if temp_destination.exists():
             shutil.rmtree(temp_destination)
         copy_skill_tree(source, temp_destination)
@@ -45,11 +46,21 @@ def install_codex_skill(codex_home: Path) -> InstallSkillResult:
             shutil.rmtree(destination)
         temp_destination.replace(destination)
 
-        legacy_path = skills_root / LEGACY_SKILL_NAME
-        removed_legacy_path = None
-        if legacy_path.exists():
-            shutil.rmtree(legacy_path)
-            removed_legacy_path = legacy_path
+        obsolete_paths = [skills_dir / LEGACY_SKILL_NAME]
+        if previous_skills_dir is not None:
+            obsolete_paths.extend(
+                [
+                    previous_skills_dir / SKILL_NAME,
+                    previous_skills_dir / LEGACY_SKILL_NAME,
+                ]
+            )
+
+        removed_obsolete_paths = []
+        for obsolete_path in dict.fromkeys(obsolete_paths):
+            if obsolete_path == destination or not obsolete_path.exists():
+                continue
+            shutil.rmtree(obsolete_path)
+            removed_obsolete_paths.append(obsolete_path)
     except OSError as exc:
         if temp_destination.exists():
             shutil.rmtree(temp_destination, ignore_errors=True)
@@ -59,7 +70,7 @@ def install_codex_skill(codex_home: Path) -> InstallSkillResult:
         skill_name=SKILL_NAME,
         destination=destination,
         replaced_existing=replaced_existing,
-        removed_legacy_path=removed_legacy_path,
+        removed_obsolete_paths=tuple(removed_obsolete_paths),
     )
 
 

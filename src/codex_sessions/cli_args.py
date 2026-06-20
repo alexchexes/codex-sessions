@@ -49,6 +49,10 @@ def default_codex_home() -> Path:
     return Path.home() / ".codex"
 
 
+def default_user_skills_dir() -> Path:
+    return Path.home() / ".agents" / "skills"
+
+
 def parse_list_args(
     argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
 ) -> argparse.Namespace:
@@ -345,13 +349,13 @@ def parse_install_skill_args(
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog=f"{prog} install-skill",
-        description="Install or update the bundled Codex skill under Codex home.",
+        description="Install or update the bundled Codex skill for the current user.",
     )
     parser.add_argument(
-        "--codex-home",
+        "--skills-dir",
         type=Path,
-        default=default_codex_home(),
-        help="Codex home directory. Defaults to CODEX_HOME or ~/.codex.",
+        default=default_user_skills_dir(),
+        help="User skills directory. Defaults to ~/.agents/skills.",
     )
     return parser.parse_args(argv)
 

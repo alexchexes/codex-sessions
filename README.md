@@ -449,8 +449,8 @@ Install or update the bundled Codex skill:
 codex-sessions install-skill
 ```
 
-This writes the `codex-sessions` skill under Codex home and removes the old
-`read-codex-session` skill copy if present.
+This writes the `codex-sessions` skill to `~/.agents/skills`.
+Use `--skills-dir <path>` to choose a different user skill directory.
 
 From a checkout, you can also run the command without installing the CLI:
 
@@ -465,8 +465,8 @@ $env:PYTHONPATH = "src"
 python -m codex_sessions install-skill
 ```
 
-After restarting Codex, ask for `$codex-sessions` or ask Codex to recover
-context from an earlier conversation.
+Codex usually detects skill changes automatically. If the skill does not appear, restart Codex.
+Then type `$` and select `$codex-sessions`, or ask Codex to do something with any of your Codex threads.
 
 ## Notes
 
