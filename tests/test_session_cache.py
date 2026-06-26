@@ -76,7 +76,8 @@ class SessionCacheTests(unittest.TestCase):
                 ended_at=datetime(2026, 4, 30, 18, 21, 39, tzinfo=timezone.utc),
                 visible_lines=(),
                 metadata_lines=(),
-                tool_lines=(),
+                tool_input_lines=(),
+                tool_output_lines=(),
             )
 
             entry = session_cache_entry_from_document(

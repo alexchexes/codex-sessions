@@ -24,7 +24,8 @@ class SessionDocumentTests(unittest.TestCase):
             ended_at=None,
             visible_lines=("User: User message title",),
             metadata_lines=(),
-            tool_lines=(),
+            tool_input_lines=(),
+            tool_output_lines=(),
         )
 
         self.assertEqual(infer_search_document_title(document), "Stored rollout title")
@@ -40,7 +41,8 @@ class SessionDocumentTests(unittest.TestCase):
                 "User: Please investigate the import/export behavior.",
             ),
             metadata_lines=(),
-            tool_lines=(),
+            tool_input_lines=(),
+            tool_output_lines=(),
         )
 
         self.assertEqual(
@@ -56,7 +58,8 @@ class SessionDocumentTests(unittest.TestCase):
             ended_at=None,
             visible_lines=(),
             metadata_lines=(),
-            tool_lines=(),
+            tool_input_lines=(),
+            tool_output_lines=(),
         )
 
         self.assertEqual(inferred_thread_name(document), "Imported session 11111111")
@@ -90,7 +93,9 @@ class SessionDocumentTests(unittest.TestCase):
             if isinstance(payload, dict) and payload.get("encrypted_content"):
                 return [("visible", [f"User: {payload['encrypted_content']}"])]
             if isinstance(payload, dict) and payload.get("type") == "function_call":
-                return [("tools", ["Tool call: shell_command"])]
+                return [("tool_inputs", ["Tool call: shell_command"])]
+            if isinstance(payload, dict) and payload.get("type") == "function_call_output":
+                return [("tool_outputs", ["Tool output: shell_command: done"])]
             return []
 
         records = [
@@ -118,6 +123,11 @@ class SessionDocumentTests(unittest.TestCase):
                 "type": "response_item",
                 "payload": {"type": "function_call"},
             },
+            {
+                "timestamp": "2026-04-30T18:20:43Z",
+                "type": "response_item",
+                "payload": {"type": "function_call_output"},
+            },
         ]
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -139,10 +149,15 @@ class SessionDocumentTests(unittest.TestCase):
         self.assertEqual(
             document.started_at, datetime(2026, 4, 30, 18, 20, 39, tzinfo=timezone.utc)
         )
-        self.assertEqual(document.ended_at, datetime(2026, 4, 30, 18, 20, 42, tzinfo=timezone.utc))
+        self.assertEqual(document.ended_at, datetime(2026, 4, 30, 18, 20, 43, tzinfo=timezone.utc))
         self.assertEqual(document.visible_lines, ("User: ...",))
         self.assertEqual(document.metadata_lines, ("Session metadata: present",))
-        self.assertEqual(document.tool_lines, ("Tool call: shell_command",))
+        self.assertEqual(document.tool_input_lines, ("Tool call: shell_command",))
+        self.assertEqual(document.tool_output_lines, ("Tool output: shell_command: done",))
+        self.assertEqual(
+            document.tool_lines,
+            ("Tool call: shell_command", "Tool output: shell_command: done"),
+        )
 
 
 if __name__ == "__main__":

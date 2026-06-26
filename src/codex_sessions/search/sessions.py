@@ -107,11 +107,15 @@ def session_search_lines(input_path: Path, options: SearchOptions) -> list[str]:
 def search_document_lines(document: SearchDocument, options: SearchOptions) -> list[str]:
     lines: list[str] = []
     seen_lines = set()
-    line_groups = [document.visible_lines]
+    line_groups = []
+    if options.include_visible:
+        line_groups.append(document.visible_lines)
     if options.include_metadata:
         line_groups.append(document.metadata_lines)
-    if options.include_tools:
-        line_groups.append(document.tool_lines)
+    if options.include_tools or options.include_tool_inputs:
+        line_groups.append(document.tool_input_lines)
+    if options.include_tools or options.include_tool_outputs:
+        line_groups.append(document.tool_output_lines)
 
     for group in line_groups:
         for line in group:
@@ -123,15 +127,25 @@ def search_document_lines(document: SearchDocument, options: SearchOptions) -> l
 
 
 def build_search_document(input_path: Path, redaction: str) -> SearchDocument:
+    tool_names_by_call_id: dict[str, str] = {}
+
+    def render_line_groups_with_tool_context(
+        record: dict[str, Any],
+    ) -> list[tuple[str, list[str]]]:
+        return render_search_line_groups(record, tool_names_by_call_id)
+
     return build_session_document(
         input_path,
         redaction,
         session_id_from_path=session_id_from_path,
-        render_line_groups=render_search_line_groups,
+        render_line_groups=render_line_groups_with_tool_context,
     )
 
 
-def render_search_line_groups(record: dict[str, Any]) -> list[tuple[str, list[str]]]:
+def render_search_line_groups(
+    record: dict[str, Any],
+    tool_names_by_call_id: dict[str, str] | None = None,
+) -> list[tuple[str, list[str]]]:
     record_type = record.get("type")
     payload = record.get("payload")
 
@@ -153,7 +167,22 @@ def render_search_line_groups(record: dict[str, Any]) -> list[tuple[str, list[st
         if payload_type == "reasoning":
             return []
         if payload_type in {"function_call", "tool_search_call", "custom_tool_call"}:
-            return [("tools", render_tool_call_search_lines(payload))]
+            if tool_names_by_call_id is not None:
+                call_id = payload.get("call_id")
+                if isinstance(call_id, str) and call_id:
+                    tool_names_by_call_id[call_id] = tool_display_name(payload)
+            return [("tool_inputs", render_tool_call_search_lines(payload))]
+        if payload_type in {
+            "function_call_output",
+            "tool_search_output",
+            "custom_tool_call_output",
+        }:
+            return [
+                (
+                    "tool_outputs",
+                    render_tool_output_search_lines(payload, tool_names_by_call_id or {}),
+                )
+            ]
         return []
 
     if record_type == "event_msg" and isinstance(payload, dict):
@@ -172,9 +201,13 @@ def render_search_line_groups(record: dict[str, Any]) -> list[tuple[str, list[st
 def render_search_lines(record: dict[str, Any], options: SearchOptions) -> list[str]:
     lines = []
     for group, group_lines in render_search_line_groups(record):
+        if group == "visible" and not options.include_visible:
+            continue
         if group == "metadata" and not options.include_metadata:
             continue
-        if group == "tools" and not options.include_tools:
+        if group == "tool_inputs" and not (options.include_tools or options.include_tool_inputs):
+            continue
+        if group == "tool_outputs" and not (options.include_tools or options.include_tool_outputs):
             continue
         lines.extend(group_lines)
     return lines
@@ -237,6 +270,31 @@ def render_tool_call_search_lines(payload: dict[str, Any]) -> list[str]:
         for line in preview_lines
         if line.strip() and not line.startswith("```")
     ]
+
+
+def render_tool_output_search_lines(
+    payload: dict[str, Any],
+    tool_names_by_call_id: dict[str, str],
+) -> list[str]:
+    call_type = payload.get("type", "tool_output")
+    call_id = payload.get("call_id")
+    tool_name = tool_names_by_call_id.get(call_id) if isinstance(call_id, str) and call_id else None
+    label = tool_name or call_id or call_type
+
+    if "output" in payload:
+        output_text = render_search_text(payload["output"])
+    else:
+        remaining = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"type", "call_id", "status", "execution"}
+        }
+        output_text = render_search_text(remaining)
+
+    if not output_text:
+        return [f"Tool output: {label}"]
+    output_preview = truncate_preview(output_text, DEFAULT_TOOL_PREVIEW_CHARS)
+    return render_labeled_search_lines(f"Tool output: {label}", output_preview)
 
 
 def search_document_for_file(
@@ -390,7 +448,9 @@ def search_sessions(
         )
         inferred_title = infer_search_document_title(document)
         session = session_display_info_for_search(session_file, entries_by_id, inferred_title)
-        session_title_matches = session_title_match_spans(session, search_pattern)
+        session_title_matches = (
+            session_title_match_spans(session, search_pattern) if options.include_titles else ()
+        )
         if lines or session_title_matches:
             results.append(
                 SearchResult(

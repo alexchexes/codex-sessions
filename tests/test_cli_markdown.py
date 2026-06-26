@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codex_sessions.cli_args import (  # noqa: E402
+    parse_duration_arg_seconds,
     parse_markdown_include,
     resolve_markdown_tool_mode,
 )
@@ -89,8 +90,10 @@ class CliMarkdownTests(unittest.TestCase):
             )
 
             output = output_path.read_text(encoding="utf-8")
-            self.assertEqual(count, 1)
+            self.assertEqual(count, 3)
             self.assertIn("complete record", output)
+            self.assertIn("# First Record:", output)
+            self.assertIn("# Latest Record:", output)
 
     def test_markdown_metadata_table_escapes_pipes_and_newlines(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -136,6 +139,117 @@ class CliMarkdownTests(unittest.TestCase):
     def test_include_modifiers(self) -> None:
         self.assertEqual(parse_markdown_include("default,-tools"), set())
         self.assertEqual(parse_markdown_include("dialogue,+metadata"), {"metadata"})
+
+    def test_parse_duration_arg_seconds_accepts_common_units(self) -> None:
+        self.assertEqual(parse_duration_arg_seconds("0"), 0)
+        self.assertEqual(parse_duration_arg_seconds("30s"), 30)
+        self.assertEqual(parse_duration_arg_seconds("5m"), 300)
+        self.assertEqual(parse_duration_arg_seconds("4h"), 14400)
+        self.assertEqual(parse_duration_arg_seconds("250ms"), 0.25)
+
+    def test_markdown_timestamps_add_times_to_section_headings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            write_jsonl(
+                input_path,
+                [
+                    {
+                        "timestamp": "2026-04-26T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": "hello",
+                        },
+                    }
+                ],
+            )
+
+            convert_jsonl_to_markdown(
+                input_path,
+                output_path,
+                MarkdownOptions(
+                    tool_mode="none",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=False,
+                    redaction="...",
+                    timestamps=True,
+                ),
+            )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertRegex(output, r"# User \| .+ \(UTC[+-]\d\d:\d\d\):")
+            self.assertNotIn("# First Record", output)
+            self.assertNotIn("# Latest Record", output)
+            self.assertIn("hello", output)
+
+    def test_markdown_inserts_long_gap_markers_between_rendered_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            write_jsonl(
+                input_path,
+                [
+                    import_user_message("first", "2026-04-26T00:00:00Z"),
+                    {
+                        "timestamp": "2026-04-26T01:00:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "token_count", "total": 1},
+                    },
+                    import_user_message("second", "2026-04-26T05:00:00Z"),
+                ],
+            )
+
+            convert_jsonl_to_markdown(
+                input_path,
+                output_path,
+                MarkdownOptions(
+                    tool_mode="none",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=False,
+                    redaction="...",
+                    gap_threshold_seconds=4 * 60 * 60,
+                ),
+            )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertIn("# Time Gap:", output)
+            self.assertIn("`5h` elapsed since previous rendered event.", output)
+            self.assertNotIn("1h", output)
+
+    def test_markdown_timestamps_keep_gap_markers_without_boundary_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            write_jsonl(
+                input_path,
+                [
+                    import_user_message("first", "2026-04-26T00:00:00Z"),
+                    import_user_message("second", "2026-04-26T05:00:00Z"),
+                ],
+            )
+
+            convert_jsonl_to_markdown(
+                input_path,
+                output_path,
+                MarkdownOptions(
+                    tool_mode="none",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=False,
+                    redaction="...",
+                    timestamps=True,
+                ),
+            )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertRegex(output, r"# Time Gap \| .+ \(UTC[+-]\d\d:\d\d\):")
+            self.assertIn("`5h` elapsed since previous rendered event.", output)
+            self.assertNotIn("# First Record", output)
+            self.assertNotIn("# Latest Record", output)
 
 
 if __name__ == "__main__":

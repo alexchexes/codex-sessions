@@ -1,14 +1,44 @@
 import argparse
 import os
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from codex_sessions.formats.markdown.timing import (
+    DEFAULT_GAP_THRESHOLD_SECONDS,
+    DEFAULT_TOOL_DURATION_THRESHOLD_SECONDS,
+)
 from codex_sessions.formats.markdown.tools import DEFAULT_TOOL_PREVIEW_CHARS
 
 MARKDOWN_FEATURES = {"tools", "metadata", "raw"}
 MARKDOWN_TOOL_MODES = {"auto", "none", "names", "smart", "preview", "full"}
 MARKDOWN_IMAGE_MODES = {"truncate", "extract", "inline"}
+MARKDOWN_DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m|h)?$", re.IGNORECASE)
+SEARCH_TARGETS = {"visible", "metadata", "tool-inputs", "tool-outputs"}
+SEARCH_TARGET_ALIASES = {
+    "all": "all",
+    "dialogue": "visible",
+    "message": "visible",
+    "messages": "visible",
+    "visible": "visible",
+    "meta": "metadata",
+    "metadata": "metadata",
+    "tool": "tools",
+    "tools": "tools",
+    "tool-call": "tool-inputs",
+    "tool-calls": "tool-inputs",
+    "tool-input": "tool-inputs",
+    "tool-inputs": "tool-inputs",
+    "tool-arg": "tool-inputs",
+    "tool-args": "tool-inputs",
+    "tool-argument": "tool-inputs",
+    "tool-arguments": "tool-inputs",
+    "tool-output": "tool-outputs",
+    "tool-outputs": "tool-outputs",
+    "tool-result": "tool-outputs",
+    "tool-results": "tool-outputs",
+}
 MARKDOWN_PRESETS = {
     "dialogue": set(),
     "minimal": set(),
@@ -143,12 +173,21 @@ def parse_search_args(
     parser.add_argument(
         "--tools",
         action="store_true",
-        help="Also search concise tool call previews such as shell commands.",
+        help="Also search concise tool input and output previews.",
     )
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Search visible messages, compact metadata, and concise tool call previews.",
+        help="Search visible messages, compact metadata, and concise tool input/output previews.",
+    )
+    parser.add_argument(
+        "--search-in",
+        action="append",
+        metavar="TARGETS",
+        help=(
+            "Search only selected targets. Comma-separated values: visible, metadata, "
+            "tool-inputs, tool-outputs, tools, all. May be repeated."
+        ),
     )
     parser.add_argument(
         "--session",
@@ -192,6 +231,30 @@ def parse_search_args(
         help="Ignore existing cached search text and rewrite cache entries.",
     )
     return parser.parse_args(argv)
+
+
+def parse_search_targets(specs: Sequence[str]) -> set[str]:
+    targets: set[str] = set()
+    for spec in specs:
+        for raw_part in spec.split(","):
+            part = raw_part.strip().lower().replace("_", "-")
+            if not part:
+                continue
+            alias = SEARCH_TARGET_ALIASES.get(part)
+            if alias is None:
+                allowed = sorted(SEARCH_TARGET_ALIASES)
+                raise ValueError(
+                    f"Unknown --search-in target {raw_part!r}. Allowed values: {', '.join(allowed)}"
+                )
+            if alias == "all":
+                targets.update(SEARCH_TARGETS)
+            elif alias == "tools":
+                targets.update({"tool-inputs", "tool-outputs"})
+            else:
+                targets.add(alias)
+    if not targets:
+        raise ValueError("--search-in must include at least one target")
+    return targets
 
 
 def parse_repair_index_args(
@@ -611,11 +674,57 @@ def parse_args(
         help="Markdown handling for base64 data images. Default: %(default)s.",
     )
     parser.add_argument(
+        "--timestamps",
+        action="store_true",
+        help="Markdown: add local timestamps to rendered section headings.",
+    )
+    parser.add_argument(
+        "--gap-threshold",
+        type=parse_duration_arg_seconds,
+        default=DEFAULT_GAP_THRESHOLD_SECONDS,
+        metavar="DURATION",
+        help=(
+            "Markdown: insert a time-gap marker when rendered events are at least "
+            "DURATION apart. Supports values like 30s, 5m, 4h. Default: 4h."
+        ),
+    )
+    parser.add_argument(
+        "--tool-duration-threshold",
+        type=parse_duration_arg_seconds,
+        default=DEFAULT_TOOL_DURATION_THRESHOLD_SECONDS,
+        metavar="DURATION",
+        help=(
+            "Markdown: annotate tool outputs whose duration is at least DURATION. "
+            "Use 0 to show all tool durations. Default: 30s."
+        ),
+    )
+    parser.add_argument(
         "--redact-encrypted",
         default="...",
         help="Replacement text for any encrypted_content field.",
     )
     return parser.parse_args(argv)
+
+
+def parse_duration_arg_seconds(value: str) -> float:
+    normalized = value.strip().lower()
+    match = MARKDOWN_DURATION_RE.fullmatch(normalized)
+    if not match:
+        raise argparse.ArgumentTypeError(
+            "expected a non-negative duration such as 0, 30s, 5m, or 4h"
+        )
+
+    amount = float(match.group(1))
+    unit = match.group(2) or "s"
+    if unit == "ms":
+        return amount / 1000
+    if unit == "s":
+        return amount
+    if unit == "m":
+        return amount * 60
+    if unit == "h":
+        return amount * 60 * 60
+    raise argparse.ArgumentTypeError(f"unsupported duration unit: {unit}")
 
 
 def parse_markdown_include(spec: str) -> set[str]:

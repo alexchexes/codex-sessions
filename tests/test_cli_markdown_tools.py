@@ -101,7 +101,7 @@ class CliMarkdownToolTests(unittest.TestCase):
             )
 
             output = output_path.read_text(encoding="utf-8")
-            self.assertEqual(count, 3)
+            self.assertEqual(count, 5)
             self.assertIn("**Tool call:** `shell_command`", output)
             self.assertIn("**Tool output:** `shell_command`", output)
             self.assertNotIn("echo hello", output)
@@ -252,3 +252,146 @@ class CliMarkdownToolTests(unittest.TestCase):
             output = output_path.read_text(encoding="utf-8")
             self.assertIn("**Tool call:** `mcp__playwright__browser_navigate`", output)
             self.assertIn("Url: `http://localhost:3000/`", output)
+
+    def test_markdown_tool_output_shows_long_inferred_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            write_jsonl(
+                input_path,
+                [
+                    {
+                        "timestamp": "2026-04-26T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "shell_command",
+                            "arguments": '{"command":"sleep 31"}',
+                            "call_id": "call_1",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-26T00:00:31Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": "done",
+                        },
+                    },
+                ],
+            )
+
+            convert_jsonl_to_markdown(
+                input_path,
+                output_path,
+                MarkdownOptions(
+                    tool_mode="names",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=False,
+                    redaction="...",
+                ),
+            )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertIn("Duration: `31s`", output)
+
+    def test_markdown_tool_duration_threshold_zero_shows_short_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            write_jsonl(
+                input_path,
+                [
+                    {
+                        "timestamp": "2026-04-26T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "shell_command",
+                            "arguments": '{"command":"echo hello"}',
+                            "call_id": "call_1",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-26T00:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": "hello",
+                        },
+                    },
+                ],
+            )
+
+            convert_jsonl_to_markdown(
+                input_path,
+                output_path,
+                MarkdownOptions(
+                    tool_mode="names",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=False,
+                    redaction="...",
+                    tool_duration_threshold_seconds=0,
+                ),
+            )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertIn("Duration: `1s`", output)
+
+    def test_markdown_tool_output_prefers_explicit_event_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            write_jsonl(
+                input_path,
+                [
+                    {
+                        "timestamp": "2026-04-26T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "ask_human",
+                            "arguments": '{"question":"continue?"}',
+                            "call_id": "call_1",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-26T00:01:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": "yes",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-26T00:01:00Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "mcp_tool_call_end",
+                            "call_id": "call_1",
+                            "duration": {"secs": 437, "nanos": 600000000},
+                        },
+                    },
+                ],
+            )
+
+            convert_jsonl_to_markdown(
+                input_path,
+                output_path,
+                MarkdownOptions(
+                    tool_mode="names",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=False,
+                    redaction="...",
+                ),
+            )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertIn("Duration: `7m 18s`", output)
+            self.assertNotIn("Duration: `1m`", output)

@@ -11,8 +11,8 @@ from codex_sessions.sessions.cache import (
 )
 from codex_sessions.sessions.documents import SearchDocument
 
-SEARCH_CACHE_VERSION = 3
-SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v3.json"
+SEARCH_CACHE_VERSION = 4
+SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v4.json"
 
 
 def search_cache_path(codex_home: Path) -> Path:
@@ -66,8 +66,14 @@ def cached_search_document(
 
     visible_lines = string_tuple(entry.get("visible_lines"))
     metadata_lines = string_tuple(entry.get("metadata_lines"))
-    tool_lines = string_tuple(entry.get("tool_lines"))
-    if visible_lines is None or metadata_lines is None or tool_lines is None:
+    tool_input_lines = string_tuple(entry.get("tool_input_lines"))
+    tool_output_lines = string_tuple(entry.get("tool_output_lines"))
+    if (
+        visible_lines is None
+        or metadata_lines is None
+        or tool_input_lines is None
+        or tool_output_lines is None
+    ):
         return None
 
     return SearchDocument(
@@ -77,7 +83,8 @@ def cached_search_document(
         ended_at=metadata.ended_at,
         visible_lines=visible_lines,
         metadata_lines=metadata_lines,
-        tool_lines=tool_lines,
+        tool_input_lines=tool_input_lines,
+        tool_output_lines=tool_output_lines,
     )
 
 
@@ -97,7 +104,8 @@ def search_cache_entry(
         "redaction": redaction,
         "visible_lines": list(document.visible_lines),
         "metadata_lines": list(document.metadata_lines),
-        "tool_lines": list(document.tool_lines),
+        "tool_input_lines": list(document.tool_input_lines),
+        "tool_output_lines": list(document.tool_output_lines),
     }
 
 

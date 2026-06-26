@@ -24,7 +24,8 @@ def search_document() -> SearchDocument:
         ended_at=datetime(2026, 4, 30, 19, 0, 0, tzinfo=timezone.utc),
         visible_lines=("User: please transfer this session",),
         metadata_lines=(),
-        tool_lines=(),
+        tool_input_lines=(),
+        tool_output_lines=(),
     )
 
 

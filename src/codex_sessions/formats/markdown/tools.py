@@ -8,6 +8,7 @@ from codex_sessions.formats.markdown.formatting import (
     render_json_block_content,
 )
 from codex_sessions.formats.markdown.images import MarkdownImageHandler
+from codex_sessions.formats.markdown.timing import format_duration
 
 DEFAULT_TOOL_PREVIEW_CHARS = 700
 
@@ -380,12 +381,19 @@ def render_tool_output(
     preview_chars: int,
     tool_names_by_call_id: dict[str, str],
     image_handler: MarkdownImageHandler | None = None,
+    duration_seconds: float | None = None,
 ) -> str:
     call_type = payload.get("type", "tool_output")
     call_id = payload.get("call_id")
-    tool_name = tool_names_by_call_id.get(call_id, call_type) if call_id else call_type
+    tool_name = (
+        tool_names_by_call_id.get(call_id, call_type)
+        if isinstance(call_id, str) and call_id
+        else call_type
+    )
     lines = [f"**Tool output:** `{tool_name}`"]
     append_tool_identity(lines, payload)
+    if duration_seconds is not None:
+        lines.append(f"Duration: `{format_duration(duration_seconds)}`")
 
     if mode in {"names", "smart"}:
         return "\n".join(lines)

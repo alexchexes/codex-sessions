@@ -223,6 +223,66 @@ class CliConversionTests(unittest.TestCase):
             self.assertNotIn("very long output", output)
             self.assertIn(str(output_path), buffer.getvalue())
 
+    def test_md_timing_flags_are_wired_to_markdown_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            write_jsonl(
+                input_path,
+                [
+                    {
+                        "timestamp": "2026-04-26T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "shell_command",
+                            "arguments": '{"command":"echo hello"}',
+                            "call_id": "call_1",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-26T00:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": "hello",
+                        },
+                    },
+                ],
+            )
+
+            with redirect_stdout(StringIO()):
+                result = main(
+                    [
+                        str(input_path),
+                        "--md",
+                        "--timestamps",
+                        "--tool-duration-threshold",
+                        "0",
+                        "-o",
+                        str(output_path),
+                    ]
+                )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertEqual(result, 0)
+            self.assertIn("# Codex |", output)
+            self.assertIn("Duration: `1s`", output)
+
+    def test_timestamps_flag_requires_markdown_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            write_jsonl(input_path, [{"timestamp": "2026-04-26T00:00:00Z"}])
+
+            with self.assertRaises(SystemExit) as raised:
+                main([str(input_path), "--timestamps"])
+
+            self.assertEqual(
+                str(raised.exception),
+                "--timestamps is only supported for Markdown output",
+            )
+
     def test_yaml_flag_converts_to_yaml_without_output_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir) / ".codex"

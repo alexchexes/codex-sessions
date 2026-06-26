@@ -27,7 +27,12 @@ class SearchDocument:
     ended_at: datetime | None
     visible_lines: tuple[str, ...]
     metadata_lines: tuple[str, ...]
-    tool_lines: tuple[str, ...]
+    tool_input_lines: tuple[str, ...]
+    tool_output_lines: tuple[str, ...]
+
+    @property
+    def tool_lines(self) -> tuple[str, ...]:
+        return (*self.tool_input_lines, *self.tool_output_lines)
 
 
 def sanitize(value: Any, redaction: str) -> Any:
@@ -56,8 +61,18 @@ def build_search_document(
     thread_name: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
-    line_groups: dict[str, list[str]] = {"visible": [], "metadata": [], "tools": []}
-    seen_lines: dict[str, set[str]] = {"visible": set(), "metadata": set(), "tools": set()}
+    line_groups: dict[str, list[str]] = {
+        "visible": [],
+        "metadata": [],
+        "tool_inputs": [],
+        "tool_outputs": [],
+    }
+    seen_lines: dict[str, set[str]] = {
+        "visible": set(),
+        "metadata": set(),
+        "tool_inputs": set(),
+        "tool_outputs": set(),
+    }
 
     for _, raw_record in iter_jsonl_objects(input_path):
         record_timestamp = parse_timestamp(raw_record.get("timestamp"))
@@ -88,10 +103,13 @@ def build_search_document(
 
         record = sanitize(raw_record, redaction)
         for group, lines in render_line_groups(record):
+            normalized_group = "tool_inputs" if group == "tools" else group
+            if normalized_group not in line_groups:
+                continue
             for line in lines:
-                if line and line not in seen_lines[group]:
-                    seen_lines[group].add(line)
-                    line_groups[group].append(line)
+                if line and line not in seen_lines[normalized_group]:
+                    seen_lines[normalized_group].add(line)
+                    line_groups[normalized_group].append(line)
 
     return SearchDocument(
         session_id=session_id,
@@ -100,7 +118,8 @@ def build_search_document(
         ended_at=ended_at,
         visible_lines=tuple(line_groups["visible"]),
         metadata_lines=tuple(line_groups["metadata"]),
-        tool_lines=tuple(line_groups["tools"]),
+        tool_input_lines=tuple(line_groups["tool_inputs"]),
+        tool_output_lines=tuple(line_groups["tool_outputs"]),
     )
 
 

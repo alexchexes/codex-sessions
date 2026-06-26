@@ -17,6 +17,7 @@ from codex_sessions.cli import (  # noqa: E402
 )
 from codex_sessions.cli_args import (  # noqa: E402
     cli_prog_from_argv0,
+    parse_search_targets,
 )
 from codex_sessions.core.terminal import (  # noqa: E402
     console_color_options,
@@ -70,6 +71,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(cli_prog_from_argv0("codex-sessions.exe"), "codex-sessions")
         self.assertEqual(cli_prog_from_argv0("anything.exe"), "codex-sessions")
         self.assertEqual(cli_prog_from_argv0("script.py"), "codex-sessions")
+
+    def test_parse_search_targets_expands_aliases(self) -> None:
+        self.assertEqual(
+            parse_search_targets(["visible,tools", "meta"]),
+            {"visible", "metadata", "tool-inputs", "tool-outputs"},
+        )
+        with self.assertRaisesRegex(ValueError, "Unknown --search-in target"):
+            parse_search_targets(["not-a-target"])
+
+    def test_find_rejects_search_in_with_broad_target_flags(self) -> None:
+        with self.assertRaisesRegex(
+            SystemExit,
+            "--search-in cannot be combined with --metadata, --tools, or --all",
+        ):
+            main(["find", "--search-in", "tool-outputs", "--tools", "needle"])
 
     def test_install_skill_command_installs_codex_sessions_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

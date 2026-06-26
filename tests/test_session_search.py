@@ -10,6 +10,7 @@ from codex_sessions.search.sessions import (
     render_search_line_groups,
     render_search_text,
     render_tool_call_search_lines,
+    render_tool_output_search_lines,
     search_document_lines,
     search_sessions,
 )
@@ -77,7 +78,8 @@ class SessionSearchTests(unittest.TestCase):
             ended_at=None,
             visible_lines=("User: needle", "User: needle"),
             metadata_lines=("Session metadata: cwd: needle",),
-            tool_lines=("Tool call: shell_command: needle",),
+            tool_input_lines=("Tool call: shell_command: input needle",),
+            tool_output_lines=("Tool output: shell_command: output needle",),
         )
 
         self.assertEqual(search_document_lines(document, search_options()), ["User: needle"])
@@ -89,7 +91,21 @@ class SessionSearchTests(unittest.TestCase):
             [
                 "User: needle",
                 "Session metadata: cwd: needle",
-                "Tool call: shell_command: needle",
+                "Tool call: shell_command: input needle",
+                "Tool output: shell_command: output needle",
+            ],
+        )
+        self.assertEqual(
+            search_document_lines(
+                document,
+                search_options(
+                    include_visible=False,
+                    include_tool_outputs=True,
+                    include_titles=False,
+                ),
+            ),
+            [
+                "Tool output: shell_command: output needle",
             ],
         )
 
@@ -103,6 +119,50 @@ class SessionSearchTests(unittest.TestCase):
         )
 
         self.assertEqual(lines, ["Tool call: shell_command: echo needle"])
+
+    def test_render_tool_output_search_lines_uses_call_name_mapping(self) -> None:
+        lines = render_tool_output_search_lines(
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": json.dumps({"stdout": "needle found", "stderr": ""}),
+            },
+            {"call_1": "shell_command"},
+        )
+
+        self.assertEqual(lines, ["Tool output: shell_command: stdout: needle found"])
+
+    def test_render_search_line_groups_separates_tool_inputs_and_outputs(self) -> None:
+        tool_names_by_call_id: dict[str, str] = {}
+        input_lines = render_search_line_groups(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "shell_command",
+                    "arguments": json.dumps({"command": "echo needle"}),
+                },
+            },
+            tool_names_by_call_id,
+        )
+        output_lines = render_search_line_groups(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "needle output",
+                },
+            },
+            tool_names_by_call_id,
+        )
+
+        self.assertEqual(input_lines, [("tool_inputs", ["Tool call: shell_command: echo needle"])])
+        self.assertEqual(
+            output_lines,
+            [("tool_outputs", ["Tool output: shell_command: needle output"])],
+        )
 
     def test_build_search_document_and_search_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

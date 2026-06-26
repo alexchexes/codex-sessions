@@ -23,7 +23,8 @@ codex-sessions <target> --md
 ```
 
 The command writes Markdown under `$CODEX_HOME/tmp/sessions/...` by default and
-prints the path.
+prints the path. If that location is not writable, rerun with `-o <output.md>`
+under a writable task or workspace directory.
 
 3. Read the generated Markdown, not the raw JSONL. Prefer targeted reads with `rg`, `Select-String`, `Get-Content -TotalCount`, or equivalent before loading a large file.
 
@@ -31,18 +32,27 @@ prints the path.
 
 ## Detail Levels
 
-Default Markdown output uses `--md-tools auto`: visible dialogue plus smart tool
-previews.
+Default Markdown output uses `--md-tools auto`: visible dialogue plus `smart` tool
+previews (`smart` keeps tool rendering compact, shows useful previews for known
+tool inputs, and falls back to names for unknown tools).
+It also includes first/latest rollout record timestamps, long gap markers (4+ hrs),
+and long tool durations (30s+).
 
-Use a higher-detail pass only when needed:
+Use a higher-detail pass only when exact arguments, exact output, metadata, or
+record ordering matters:
 
 ```bash
+codex-sessions <target> --md --timestamps
+codex-sessions <target> --md --tool-duration-threshold 0
 codex-sessions <target> --md --md-tools names
 codex-sessions <target> --md --md-tools smart
 codex-sessions <target> --md --md-tools preview --md-tool-preview-chars 1200
 codex-sessions <target> --md --md-tools full
 codex-sessions <target> --md --md-include metadata
 ```
+
+Use `--timestamps` for timeline recovery. Use
+`--tool-duration-threshold 0` only when every tool duration matters.
 
 Use `--md-include metadata` only when turn context, token counts, cwd, model, or
 rate-limit information matters. Metadata-inclusive renders can be very noisy in
@@ -55,7 +65,8 @@ image content matters and the Markdown should link to real image files. Use
 Markdown; inline image notes point back to `--md-images truncate` and
 `--md-images extract` for cleanup.
 
-Use `--format yaml` only when the user asks for raw structured inspection.
+Use `--format yaml` only for targeted structured inspection, such as fields not
+indexed by search or event ordering that Markdown does not expose clearly.
 
 ## Search
 
@@ -67,12 +78,19 @@ codex-sessions find -i "search phrase"
 codex-sessions find -i -r "regex|pattern"
 codex-sessions find --tools "shell command"
 codex-sessions find --metadata "repository-or-cwd"
+codex-sessions find --session <target> --search-in tool-inputs,tool-outputs "tool-or-needle"
 ```
 
 `find` searches deserialized visible messages by default, highlights matches,
 groups results by session, and caches extracted text under
-`$CODEX_HOME/cache/codex-sessions/`. Use raw `rg` only for narrow file-format
-checks or when searching fields not covered by `find`.
+`$CODEX_HOME/cache/codex-sessions/`. Use `--search-in` for precise targets:
+`visible`, `metadata`, `tool-inputs`, `tool-outputs`, `tools`, or `all`.
+For broad research, start with `find --all`, `--session`, `--line-width`, and
+`-m 0`, then render only the sessions that look relevant.
+
+Use raw `rg` only for narrow file-format checks, missing record types, exact raw
+event fields/order not exposed clearly by Markdown, or fields not covered by
+`find`.
 
 If `list` or `find` shows `NO ENTRY IN session_index.jsonl`, inspect proposed
 index repairs with:

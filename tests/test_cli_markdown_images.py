@@ -91,7 +91,7 @@ class CliMarkdownImageTests(unittest.TestCase):
             )
 
             output = output_path.read_text(encoding="utf-8")
-            self.assertEqual(count, 1)
+            self.assertEqual(count, 3)
             self.assertIn("see this", output)
             self.assertIn("[input image: image/png data URL;", output)
             self.assertIn("base64 chars truncated", output)
@@ -142,7 +142,7 @@ class CliMarkdownImageTests(unittest.TestCase):
 
             output = output_path.read_text(encoding="utf-8")
             image_files = list((Path(tmpdir) / "rollout_assets").glob("image-*.png"))
-            self.assertEqual(count, 1)
+            self.assertEqual(count, 3)
             self.assertEqual(len(image_files), 1)
             self.assertEqual(image_files[0].read_bytes(), image_bytes)
             self.assertIn("![input image](rollout_assets/image-", output)
@@ -262,7 +262,7 @@ class CliMarkdownImageTests(unittest.TestCase):
             )
 
             output = output_path.read_text(encoding="utf-8")
-            self.assertEqual(count, 1)
+            self.assertEqual(count, 3)
             self.assertIn("data:image/png;base64,image/png data URL;", output)
             self.assertIn("rollout.jsonl:1", output)
             self.assertIn(f"base64 prefix `{expected_prefix}`", output)

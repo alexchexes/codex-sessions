@@ -21,7 +21,7 @@ class SearchCacheTests(unittest.TestCase):
     def test_search_cache_path_uses_codex_cache_directory(self) -> None:
         self.assertEqual(
             search_cache_path(Path("/tmp/codex")).as_posix(),
-            "/tmp/codex/cache/codex-sessions/search-v3.json",
+            "/tmp/codex/cache/codex-sessions/search-v4.json",
         )
 
     def test_read_search_cache_returns_entries_for_current_version(self) -> None:
@@ -71,7 +71,8 @@ class SearchCacheTests(unittest.TestCase):
                 ended_at=datetime(2026, 4, 30, 18, 21, 39, tzinfo=timezone.utc),
                 visible_lines=("Codex: cached line",),
                 metadata_lines=("Session metadata: cwd: repo",),
-                tool_lines=("Tool call: shell_command",),
+                tool_input_lines=("Tool call: shell_command",),
+                tool_output_lines=("Tool output: shell_command: done",),
             )
 
             entry = search_cache_entry(rollout_path, stat_result, document, "...")
@@ -92,7 +93,8 @@ class SearchCacheTests(unittest.TestCase):
                 "redaction": "...",
                 "visible_lines": ["Codex: cached line"],
                 "metadata_lines": [],
-                "tool_lines": [],
+                "tool_input_lines": [],
+                "tool_output_lines": [],
             }
 
             self.assertIsNone(

@@ -280,11 +280,21 @@ class CliFindContentTests(unittest.TestCase):
                         "type": "response_item",
                         "payload": {
                             "type": "function_call",
+                            "call_id": "call_1",
                             "name": "shell_command",
                             "arguments": (
                                 '{"command":"rg copy-as-markdown",'
                                 '"workdir":"d:\\\\repos\\\\copy-as-markdown"}'
                             ),
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-30T18:21:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": json.dumps({"stdout": "output-only-needle", "stderr": ""}),
                         },
                     },
                 ],
@@ -311,6 +321,53 @@ class CliFindContentTests(unittest.TestCase):
                 )
             self.assertEqual(tools_result, 0)
             self.assertIn("Tool call: shell_command", buffer.getvalue())
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                tool_output_result = main(
+                    [
+                        "find",
+                        "--tools",
+                        "output-only-needle",
+                        "--codex-home",
+                        str(codex_home),
+                    ]
+                )
+            self.assertEqual(tool_output_result, 0)
+            self.assertIn("Tool output: shell_command", buffer.getvalue())
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                tool_input_only_result = main(
+                    [
+                        "find",
+                        "--search-in",
+                        "tool-inputs",
+                        "output-only-needle",
+                        "--codex-home",
+                        str(codex_home),
+                    ]
+                )
+            self.assertEqual(tool_input_only_result, 1)
+            self.assertEqual(buffer.getvalue(), "")
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                tool_output_only_result = main(
+                    [
+                        "find",
+                        "--search-in",
+                        "tool-outputs",
+                        "output-only-needle",
+                        "--codex-home",
+                        str(codex_home),
+                    ]
+                )
+            self.assertEqual(tool_output_only_result, 0)
+            self.assertIn(
+                "Tool output: shell_command: stdout: output-only-needle",
+                buffer.getvalue(),
+            )
 
     def test_find_regex_is_case_insensitive_when_requested(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

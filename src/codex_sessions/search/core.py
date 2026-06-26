@@ -19,6 +19,10 @@ class SearchOptions:
     include_tools: bool
     color: str
     redaction: str
+    include_visible: bool = True
+    include_tool_inputs: bool = False
+    include_tool_outputs: bool = False
+    include_titles: bool = True
 
 
 @dataclass(frozen=True)
@@ -114,10 +118,11 @@ def make_search_line(
 
 
 def search_line_prefix_end(source_line: str) -> int:
-    if source_line.startswith("Tool call: "):
-        second_separator = source_line.find(": ", len("Tool call: "))
-        if second_separator != -1 and second_separator <= 72:
-            return second_separator + 2
+    for tool_prefix in ("Tool call: ", "Tool output: "):
+        if source_line.startswith(tool_prefix):
+            second_separator = source_line.find(": ", len(tool_prefix))
+            if second_separator != -1 and second_separator <= 72:
+                return second_separator + 2
 
     prefix_end = source_line.find(": ")
     if prefix_end != -1 and prefix_end <= 48:

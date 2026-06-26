@@ -293,7 +293,8 @@ def build_transfer_document(input_path: Path) -> SearchDocument:
             line for line in (first_user_line, first_codex_line) if line is not None
         ),
         metadata_lines=(),
-        tool_lines=(),
+        tool_input_lines=(),
+        tool_output_lines=(),
     )
 
 
@@ -341,7 +342,7 @@ def divergence_record_preview(
     rendered_groups = render_search_line_groups(record)
     lines: list[str] = []
     # Divergence output should prefer what the user would recognize before raw metadata.
-    for preferred_group in ("visible", "tools", "metadata"):
+    for preferred_group in ("visible", "tool_inputs", "tool_outputs", "metadata"):
         for group, group_lines in rendered_groups:
             if group == preferred_group:
                 lines.extend(group_lines)

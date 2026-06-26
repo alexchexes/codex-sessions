@@ -75,6 +75,17 @@ class SearchTests(unittest.TestCase):
         self.assertIn("copy-as-markdown", result.text)
         self.assertLessEqual(len(result.text), 80)
 
+    def test_search_matching_lines_keeps_tool_output_name_when_truncated(self) -> None:
+        pattern = re.compile("needle")
+        line = f"Tool output: shell_command: {'a' * 80} needle {'b' * 80}"
+
+        (result,) = search_matching_lines([line], pattern, 90)
+
+        self.assertEqual(result.occurrence_count, 1)
+        self.assertTrue(result.text.startswith("Tool output: shell_command: "))
+        self.assertIn("needle", result.text)
+        self.assertLessEqual(len(result.text), 90)
+
     def test_search_matching_lines_keeps_two_distant_matches_when_possible(self) -> None:
         pattern = re.compile("copy-as-markdown")
         line = f"{'a' * 80} copy-as-markdown {'b' * 80} copy-as-markdown {'c' * 80}"

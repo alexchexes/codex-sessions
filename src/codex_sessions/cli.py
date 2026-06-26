@@ -22,6 +22,7 @@ from codex_sessions.cli_args import (
     parse_repair_index_args,
     parse_reset_state_cache_args,
     parse_search_args,
+    parse_search_targets,
     parse_sync_args,
     resolve_markdown_tool_mode,
 )
@@ -170,6 +171,27 @@ def run_search_command(args: argparse.Namespace) -> int:
         raise SystemExit("--line-width must be at least 20")
     if args.max_lines_per_session < 0:
         raise SystemExit("--max-lines-per-session must be zero or greater")
+    if args.search_in and (args.metadata or args.tools or args.all):
+        raise SystemExit("--search-in cannot be combined with --metadata, --tools, or --all")
+
+    if args.search_in:
+        try:
+            search_targets = parse_search_targets(args.search_in)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        include_visible = "visible" in search_targets
+        include_metadata = "metadata" in search_targets
+        include_tool_inputs = "tool-inputs" in search_targets
+        include_tool_outputs = "tool-outputs" in search_targets
+        include_tools = False
+        include_titles = include_visible
+    else:
+        include_visible = True
+        include_metadata = args.metadata or args.all
+        include_tools = args.tools or args.all
+        include_tool_inputs = False
+        include_tool_outputs = False
+        include_titles = True
 
     codex_home = args.codex_home.expanduser().resolve()
     session_index_path = (
@@ -186,10 +208,14 @@ def run_search_command(args: argparse.Namespace) -> int:
         ignore_case=args.ignore_case,
         line_width=args.line_width,
         max_lines_per_session=args.max_lines_per_session,
-        include_metadata=args.metadata or args.all,
-        include_tools=args.tools or args.all,
+        include_metadata=include_metadata,
+        include_tools=include_tools,
         color=args.color,
         redaction=args.redact_encrypted,
+        include_visible=include_visible,
+        include_tool_inputs=include_tool_inputs,
+        include_tool_outputs=include_tool_outputs,
+        include_titles=include_titles,
     )
 
     try:
@@ -1742,6 +1768,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("--md-tool-preview-chars must be greater than zero")
 
     output_format = infer_output_format(args)
+    if output_format != "md" and args.timestamps:
+        raise SystemExit("--timestamps is only supported for Markdown output")
     try:
         conversion_input = resolve_conversion_input(args.input, codex_home)
     except CliError as exc:
@@ -1770,6 +1798,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     include_raw="raw" in markdown_features,
                     redaction=args.redact_encrypted,
                     image_mode=args.md_images,
+                    timestamps=args.timestamps,
+                    gap_threshold_seconds=args.gap_threshold,
+                    tool_duration_threshold_seconds=args.tool_duration_threshold,
                 ),
             )
         except ValueError as exc:
