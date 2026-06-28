@@ -10,11 +10,8 @@ Use this skill to inspect Codex session history without loading raw rollout JSON
 ## Workflow
 
 1. Resolve the target session:
-   - If the user gives a rollout path, session ID, exact thread title, or
-     `latest`, pass it directly to `codex-sessions`.
-   - If the user gives a topic, partial ID, or partial title, use
-     `codex-sessions find` first, then rerun conversion with a concrete session
-     ID. Do not guess between multiple fuzzy matches.
+   - If the user gives a rollout path, session ID, exact thread title, or `latest`, pass it directly to `codex-sessions`.
+   - If the user gives a topic, partial ID, or partial title, use `codex-sessions find` first, then rerun conversion with a concrete session ID. Do not guess between multiple fuzzy matches.
 
 2. Prepare compact Markdown with the installed CLI:
 
@@ -22,9 +19,7 @@ Use this skill to inspect Codex session history without loading raw rollout JSON
 codex-sessions <target> --md
 ```
 
-The command writes Markdown under `$CODEX_HOME/tmp/sessions/...` by default and
-prints the path. If that location is not writable, rerun with `-o <output.md>`
-under a writable task or workspace directory.
+The command writes Markdown under `$CODEX_HOME/tmp/sessions/...` by default and prints the path. If that location is not writable, rerun with `-o <output.md>` under a writable task or workspace directory.
 
 3. Read the generated Markdown, not the raw JSONL. Prefer targeted reads with `rg`, `Select-String`, `Get-Content -TotalCount`, or equivalent before loading a large file.
 
@@ -32,14 +27,9 @@ under a writable task or workspace directory.
 
 ## Detail Levels
 
-Default Markdown output uses `--md-tools auto`: visible dialogue plus `smart` tool
-previews (`smart` keeps tool rendering compact, shows useful previews for known
-tool inputs, and falls back to names for unknown tools).
-It also includes first/latest rollout record timestamps, long gap markers (4+ hrs),
-and long tool durations (30s+).
+Default Markdown output uses `--md-tools auto`: visible dialogue plus `smart` tool previews (`smart` keeps tool rendering compact, shows useful previews for known tool inputs, and falls back to names for unknown tools). It also includes first/latest rollout record timestamps, long gap markers (4+ hrs), and long tool durations (30s+).
 
-Use a higher-detail pass only when exact arguments, exact output, metadata, or
-record ordering matters:
+Use a higher-detail pass only when exact arguments, exact output, metadata, or record ordering matters:
 
 ```bash
 codex-sessions <target> --md --timestamps
@@ -51,27 +41,17 @@ codex-sessions <target> --md --md-tools full
 codex-sessions <target> --md --md-include metadata
 ```
 
-Use `--timestamps` for timeline recovery. Use
-`--tool-duration-threshold 0` only when every tool duration matters.
+Use `--timestamps` for timeline recovery. Use `--tool-duration-threshold 0` only when every tool duration matters.
 
-Use `--md-include metadata` only when turn context, token counts, cwd, model, or
-rate-limit information matters. Metadata-inclusive renders can be very noisy in
-long sessions because repeated turn contexts and token-count records may dwarf
-the dialogue.
+Use `--md-include metadata` only when turn context, token counts, cwd, model, or rate-limit information matters. Metadata-inclusive renders can be very noisy in long sessions because repeated turn contexts and token-count records may dwarf the dialogue.
 
-Base64 data images are truncated by default. Use `--md-images extract` when
-image content matters and the Markdown should link to real image files. Use
-`--md-images inline` only when the renderer must receive self-contained
-Markdown; inline image notes point back to `--md-images truncate` and
-`--md-images extract` for cleanup.
+Base64 data images are truncated by default. Use `--md-images extract` when image content matters and the Markdown should link to real image files. Use `--md-images inline` only when the renderer must receive self-contained Markdown; inline image notes point back to `--md-images truncate` and `--md-images extract` for cleanup.
 
-Use `--format yaml` only for targeted structured inspection, such as fields not
-indexed by search or event ordering that Markdown does not expose clearly.
+Use `--format yaml` only for targeted structured inspection, such as fields not indexed by search or event ordering that Markdown does not expose clearly.
 
 ## Search
 
-When the user asks to find a previous conversation by topic or phrase, prefer
-`codex-sessions find` before raw `rg` over JSONL:
+When the user asks to find a previous conversation by topic or phrase, prefer `codex-sessions find` before raw `rg` over JSONL:
 
 ```bash
 codex-sessions find -i "search phrase"
@@ -81,39 +61,23 @@ codex-sessions find --metadata "repository-or-cwd"
 codex-sessions find --session <target> --search-in tool-inputs,tool-outputs "tool-or-needle"
 ```
 
-`find` searches deserialized visible messages by default, highlights matches,
-groups results by session, and caches extracted text under
-`$CODEX_HOME/cache/codex-sessions/`. Use `--search-in` for precise targets:
-`visible`, `metadata`, `tool-inputs`, `tool-outputs`, `tools`, or `all`.
-For broad research, start with `find --all`, `--session`, `--line-width`, and
-`-m 0`, then render only the sessions that look relevant.
+`find` searches deserialized visible messages by default, highlights matches, groups results by session, and caches extracted text under `$CODEX_HOME/cache/codex-sessions/`. Use `--search-in` for precise targets: `visible`, `metadata`, `tool-inputs`, `tool-outputs`, `tools`, or `all`. For broad research, start with `find --all`, `--session`, `--line-width`, and `-m 0`, then render only the sessions that look relevant.
 
-Use raw `rg` only for narrow file-format checks, missing record types, exact raw
-event fields/order not exposed clearly by Markdown, or fields not covered by
-`find`.
+Use raw `rg` only for narrow file-format checks, missing record types, exact raw event fields/order not exposed clearly by Markdown, or fields not covered by `find`.
 
-If `list` or `find` shows `NO ENTRY IN session_index.jsonl`, inspect proposed
-index repairs with:
+If `list` or `find` shows `NO ENTRY IN session_index.jsonl`, inspect proposed index repairs with:
 
 ```bash
 codex-sessions repair-index --dry-run
 ```
 
-Treat `FILENAME ID MISMATCH`, `INVALID RECORD-1 session_meta; USING ID FROM
-FILENAME`, and `INVALID RECORD-1 session_meta; NO SESSION ID` as rollout-integrity
-warnings. The first record's valid `session_meta.payload.id` is authoritative;
-later `session_meta` records may be copied fork history. `repair-index` skips
-rollouts without a canonical record-1 ID, so do not present it as a repair for
-those warnings.
+Treat `FILENAME ID MISMATCH`, `INVALID RECORD-1...` as rollout-integrity warnings. Record-1 `session_meta.payload.id` is authoritative; `repair-index` skips rollouts without a canonical record-1 ID.
 
-Run `codex-sessions repair-index` only when the user wants to modify Codex
-state. It backs up `session_index.jsonl` and renames root `state_*.sqlite*`
-files so Codex rebuilds its state cache.
+Run `codex-sessions repair-index` only when the user wants to modify Codex state. It backs up `session_index.jsonl` and renames root `state_*.sqlite*` files so Codex rebuilds its state cache.
 
 ## Direct Paths
 
-When the target is already a rollout path and the user requests a custom output
-location, pass the path and `-o` directly:
+When the target is already a rollout path and the user requests a custom output location, pass the path and `-o` directly:
 
 ```bash
 codex-sessions <rollout.jsonl> --md --md-tools smart -o <output.md>
