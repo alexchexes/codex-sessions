@@ -12,9 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codex_sessions.cli import main  # noqa: E402
+from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    session_id = session_id_from_path(path)
+    if session_id and (not records or records[0].get("type") != "session_meta"):
+        records = [{"type": "session_meta", "payload": {"id": session_id}}, *records]
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",
@@ -73,17 +77,18 @@ class CliImportMergeTests(unittest.TestCase):
                 ],
             )
             local_records = [
-                import_title_record(session_id, "Local merge title", "2026-04-30T18:20:39Z"),
                 {
                     "timestamp": "2026-04-30T18:20:40Z",
                     "type": "session_meta",
                     "payload": {"id": session_id},
                 },
+                import_title_record(session_id, "Local merge title", "2026-04-30T18:20:39Z"),
                 import_user_message("common body", "2026-04-30T18:21:39Z"),
             ]
             incoming_records = [
+                local_records[0],
                 import_title_record(session_id, "Incoming merge title", "2026-04-30T18:20:39Z"),
-                *local_records[1:],
+                *local_records[2:],
                 import_user_message("incoming tail", "2026-04-30T18:22:39Z"),
             ]
             write_jsonl(target_path, local_records)
@@ -178,10 +183,10 @@ class CliImportMergeTests(unittest.TestCase):
             write_jsonl(
                 sessions_day / equivalent_source.name,
                 [
+                    *equivalent_common,
                     import_title_record(
                         equivalent_id, "Local equivalent title", "2026-04-30T18:20:39Z"
                     ),
-                    *equivalent_common,
                 ],
             )
             write_jsonl(

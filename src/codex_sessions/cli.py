@@ -61,6 +61,7 @@ from codex_sessions.sessions.paths import (
     resolve_session_target_paths,
 )
 from codex_sessions.sessions.rollout import (
+    ExportFailure,
     ExportSessionPlan,
     ExportSessionsPlan,
     ImportConflict,
@@ -287,12 +288,14 @@ def session_display_info(
     thread_name: str,
     started_at: datetime | None,
     ended_at: datetime | None,
+    identity_status: str | None = None,
 ) -> SessionDisplayInfo:
     return SessionDisplayInfo(
         session_id=session_id,
         title=thread_name,
         started_at=started_at,
         ended_at=ended_at,
+        identity_status=identity_status,
     )
 
 
@@ -572,7 +575,7 @@ def run_repair_index_command(args: argparse.Namespace) -> int:
             print_cli_line("No missing session_index.jsonl entries found.")
         if skipped_without_id:
             print_cli_line(
-                f"Skipped rollout files without session id: {skipped_without_id}",
+                f"Skipped rollout files without a canonical session id: {skipped_without_id}",
                 style=STYLE_ATTENTION,
             )
         return 0
@@ -615,7 +618,7 @@ def run_repair_index_command(args: argparse.Namespace) -> int:
         print_cli_line("No missing session_index.jsonl entries found.")
     if result.skipped_without_id:
         print_cli_line(
-            f"Skipped rollout files without session id: {result.skipped_without_id}",
+            f"Skipped rollout files without a canonical session id: {result.skipped_without_id}",
             style=STYLE_ATTENTION,
         )
     return 0
@@ -711,7 +714,12 @@ def import_rollout_action_label(plan: ImportSessionPlan) -> str:
 def format_import_plan_lines(plan: ImportSessionPlan) -> list[CliLine]:
     lines: list[CliLine] = [
         styled_session_display_text(
-            session_display_info(plan.session_id, plan.thread_name, plan.started_at, plan.ended_at),
+            session_display_info(
+                plan.session_id,
+                plan.thread_name,
+                plan.started_at,
+                plan.ended_at,
+            ),
             sys.stdout.encoding,
         ),
     ]
@@ -889,6 +897,15 @@ def format_import_duplicate_lines(duplicate: ImportDuplicateSession) -> list[Cli
 
 
 def format_import_failure_lines(failure: ImportFailure) -> list[CliLine]:
+    return [
+        cli_text("FAILED", style=STYLE_ERROR),
+        *path_block_lines("Source", failure.source_path, indent="  "),
+        cli_text("  Error:", style=STYLE_ATTENTION),
+        *indented_text_lines(failure.message, indent="    "),
+    ]
+
+
+def format_export_failure_lines(failure: ExportFailure) -> list[CliLine]:
     return [
         cli_text("FAILED", style=STYLE_ERROR),
         *path_block_lines("Source", failure.source_path, indent="  "),
@@ -1082,24 +1099,37 @@ def format_sync_export_plan_lines(plan: ExportSessionsPlan) -> list[CliLine]:
     lines = format_sync_export_summary_lines(plan, dry_run=True)
     lines.extend(path_block_lines("Sync folder", plan.output_path))
     if not plan.session_plans:
-        lines.append(cli_text("No local-only sessions to export.", style=STYLE_SECONDARY))
-        return lines
-
-    lines.append(cli_text("Would export local-only sessions:", style=STYLE_HEADING))
-    for session_plan in plan.session_plans:
-        lines.append(
-            prefixed_session_info_text(
-                "- ",
-                session_display_info(
-                    session_plan.session_id,
-                    session_plan.thread_name,
-                    session_plan.started_at,
-                    session_plan.ended_at,
-                ),
-                prefix_style=STYLE_SECONDARY,
-            )
+        message = (
+            "No local-only sessions can be exported."
+            if plan.failures
+            else "No local-only sessions to export."
         )
-        lines.append(path_arrow_text(session_plan.output_path))
+        lines.append(cli_text(message, style=STYLE_SECONDARY))
+    else:
+        lines.append(cli_text("Would export local-only sessions:", style=STYLE_HEADING))
+        for session_plan in plan.session_plans:
+            lines.append(
+                prefixed_session_info_text(
+                    "- ",
+                    session_display_info(
+                        session_plan.session_id,
+                        session_plan.thread_name,
+                        session_plan.started_at,
+                        session_plan.ended_at,
+                        session_plan.identity_status,
+                    ),
+                    prefix_style=STYLE_SECONDARY,
+                )
+            )
+            lines.append(path_arrow_text(session_plan.output_path))
+    if plan.warnings:
+        lines.append(cli_text("Warnings:", style=STYLE_ATTENTION))
+        for warning in plan.warnings:
+            lines.extend(format_import_warning_lines(warning))
+    if plan.failures:
+        lines.append(cli_text("Failed:", style=STYLE_ATTENTION))
+        for failure in plan.failures:
+            lines.extend(format_export_failure_lines(failure))
     return lines
 
 
@@ -1191,7 +1221,12 @@ def format_sync_import_summary_lines(
 
 
 def sync_export_discovered_count(plan: ExportSessionsPlan) -> int:
-    return len(plan.session_plans) + plan.filtered_out_count
+    return (
+        len(plan.session_plans)
+        + plan.filtered_out_count
+        + plan.already_present_count
+        + len(plan.failures)
+    )
 
 
 def format_sync_export_summary_lines(
@@ -1203,6 +1238,7 @@ def format_sync_export_summary_lines(
         "Would export local-only sessions: " if dry_run else "Exported local-only sessions: "
     )
     not_uploaded_label = "Would not upload: " if dry_run else "Not uploaded: "
+    not_uploaded_count = plan.filtered_out_count + plan.already_present_count + len(plan.failures)
     return [
         cli_text("Upload summary:", style=STYLE_NEUTRAL_HEADING),
         count_text(
@@ -1216,11 +1252,26 @@ def format_sync_export_summary_lines(
             style=style_if_nonzero(len(plan.session_plans), STYLE_SUCCESS),
         ),
         cli_text(""),
-        count_text(not_uploaded_label, plan.filtered_out_count),
+        count_text(not_uploaded_label, not_uploaded_count),
         count_text(
             "Session ID already in sync folder: ",
             plan.filtered_out_count,
             style=STYLE_SECONDARY,
+        ),
+        count_text(
+            "Identical file already in sync folder (invalid session metadata): ",
+            plan.already_present_count,
+            style=STYLE_SECONDARY,
+        ),
+        count_text(
+            "Failed: ",
+            len(plan.failures),
+            style=style_if_nonzero(len(plan.failures), STYLE_ERROR),
+        ),
+        count_text(
+            "Warnings: ",
+            len(plan.warnings),
+            style=style_if_nonzero(len(plan.warnings), STYLE_ATTENTION),
         ),
     ]
 
@@ -1253,7 +1304,12 @@ def print_single_import_result(result: ImportSessionsResult) -> None:
     print_cli_line("Imported session:", style=STYLE_SUCCESS)
     print_cli_line(
         styled_session_display_text(
-            session_display_info(plan.session_id, plan.thread_name, plan.started_at, plan.ended_at),
+            session_display_info(
+                plan.session_id,
+                plan.thread_name,
+                plan.started_at,
+                plan.ended_at,
+            ),
             sys.stdout.encoding,
         )
     )
@@ -1472,6 +1528,9 @@ def run_import_command(args: argparse.Namespace) -> int:
 def print_sync_export_result(plan: ExportSessionsPlan) -> None:
     print_cli_lines(format_sync_export_summary_lines(plan, dry_run=False))
     print_encoded_lines(path_block_lines("Sync folder", plan.output_path))
+    issue_lines: list[CliLine] = []
+    append_export_issue_lines(issue_lines, plan)
+    print_cli_lines(issue_lines)
 
 
 def print_sync_import_summary(plan: ImportSessionsPlan) -> None:
@@ -1542,7 +1601,7 @@ def run_sync_command(args: argparse.Namespace) -> int:
         except (CliError, ValueError) as exc:
             raise SystemExit(str(exc)) from exc
         print_cli_lines(format_sync_plan_lines(plan, show_divergence=args.show_divergence))
-        return 1 if import_plan_has_errors(plan.import_plan) else 0
+        return 1 if import_plan_has_errors(plan.import_plan) or plan.export_plan.failures else 0
 
     try:
         result = sync_sessions(
@@ -1561,7 +1620,11 @@ def run_sync_command(args: argparse.Namespace) -> int:
         show_divergence=args.show_divergence,
         non_interactive=args.non_interactive,
     )
-    return 1 if import_plan_has_errors(result.plan.import_plan) else 0
+    return (
+        1
+        if import_plan_has_errors(result.plan.import_plan) or result.plan.export_plan.failures
+        else 0
+    )
 
 
 def export_rollout_action_label(plan: ExportSessionPlan) -> str:
@@ -1573,7 +1636,13 @@ def export_rollout_action_label(plan: ExportSessionPlan) -> str:
 def format_export_session_plan_lines(plan: ExportSessionPlan) -> list[CliLine]:
     lines: list[CliLine] = [
         styled_session_display_text(
-            session_display_info(plan.session_id, plan.thread_name, plan.started_at, plan.ended_at),
+            session_display_info(
+                plan.session_id,
+                plan.thread_name,
+                plan.started_at,
+                plan.ended_at,
+                plan.identity_status,
+            ),
             sys.stdout.encoding,
         ),
         *path_block_lines("Source", plan.source_path, indent="  "),
@@ -1583,6 +1652,17 @@ def format_export_session_plan_lines(plan: ExportSessionPlan) -> list[CliLine]:
     if plan.overwrite:
         lines.extend(labeled_lines([("Overwrite", "yes")]))
     return lines
+
+
+def append_export_issue_lines(lines: list[CliLine], plan: ExportSessionsPlan) -> None:
+    if plan.warnings:
+        lines.append(cli_text("Warnings:", style=STYLE_ATTENTION))
+        for warning in plan.warnings:
+            lines.extend(format_import_warning_lines(warning))
+    if plan.failures:
+        lines.append(cli_text("Failed:", style=STYLE_ATTENTION))
+        for failure in plan.failures:
+            lines.extend(format_export_failure_lines(failure))
 
 
 def export_destination_label(bundle_plan: ExportSessionsPlan, plan: ExportSessionPlan) -> str:
@@ -1596,8 +1676,11 @@ def format_export_plan_lines(plan: ExportSessionsPlan) -> list[CliLine]:
         len(plan.session_plans) == 1
         and plan.output_kind != EXPORT_OUTPUT_ZIP
         and not plan.filtered_out_count
+        and not plan.failures
     ):
-        return format_export_session_plan_lines(plan.session_plans[0])
+        single_lines = format_export_session_plan_lines(plan.session_plans[0])
+        append_export_issue_lines(single_lines, plan)
+        return single_lines
 
     lines: list[CliLine] = [
         count_text("Sessions selected: ", len(plan.session_plans), style=STYLE_LABEL)
@@ -1627,11 +1710,13 @@ def format_export_plan_lines(plan: ExportSessionsPlan) -> list[CliLine]:
                     session_plan.thread_name,
                     session_plan.started_at,
                     session_plan.ended_at,
+                    session_plan.identity_status,
                 ),
                 prefix_style=STYLE_SECONDARY,
             )
         )
         lines.append(path_arrow_text(export_destination_label(plan, session_plan)))
+    append_export_issue_lines(lines, plan)
     return lines
 
 
@@ -1666,7 +1751,7 @@ def run_export_command(args: argparse.Namespace) -> int:
         except (CliError, ValueError) as exc:
             raise SystemExit(str(exc)) from exc
         print_cli_lines(format_export_plan_lines(plan))
-        return 0
+        return 1 if plan.failures else 0
 
     try:
         result = export_sessions(
@@ -1688,7 +1773,7 @@ def run_export_command(args: argparse.Namespace) -> int:
         raise SystemExit(str(exc)) from exc
 
     plan = result.plan
-    if len(plan.session_plans) != 1:
+    if len(plan.session_plans) != 1 or plan.failures:
         print_cli_line(
             count_text(
                 "Exported sessions: ",
@@ -1708,7 +1793,10 @@ def run_export_command(args: argparse.Namespace) -> int:
             print_encoded_lines(path_block_lines("Output zip", plan.output_path))
         elif plan.output_kind == EXPORT_OUTPUT_DIRECTORY:
             print_encoded_lines(path_block_lines("Output directory", plan.output_path))
-        return 0
+        issue_lines: list[CliLine] = []
+        append_export_issue_lines(issue_lines, plan)
+        print_cli_lines(issue_lines)
+        return 1 if plan.failures else 0
 
     session_plan = plan.session_plans[0]
     print_cli_line(
@@ -1719,6 +1807,7 @@ def run_export_command(args: argparse.Namespace) -> int:
                 session_plan.thread_name,
                 session_plan.started_at,
                 session_plan.ended_at,
+                session_plan.identity_status,
             ),
             prefix_style=STYLE_SUCCESS,
         )
@@ -1733,7 +1822,10 @@ def run_export_command(args: argparse.Namespace) -> int:
             *labeled_lines([("Action", export_rollout_action_label(session_plan))], indent="  "),
         ]
     )
-    return 0
+    issue_lines = []
+    append_export_issue_lines(issue_lines, plan)
+    print_cli_lines(issue_lines)
+    return 1 if plan.failures else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1776,6 +1868,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(str(exc)) from exc
 
     input_path = conversion_input.path
+    for warning in conversion_input.warnings:
+        print_cli_line(f"Warning: {warning}", style=STYLE_ATTENTION, stream=sys.stderr)
     output_path = resolve_output_path(
         args.output,
         input_path,

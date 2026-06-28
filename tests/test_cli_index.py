@@ -12,9 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codex_sessions.cli import main  # noqa: E402
+from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    session_id = session_id_from_path(path)
+    if session_id and (not records or records[0].get("type") != "session_meta"):
+        records = [{"type": "session_meta", "payload": {"id": session_id}}, *records]
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",
@@ -50,6 +54,37 @@ def import_user_message(content: str, timestamp: str) -> dict[str, Any]:
 
 
 class CliIndexTests(unittest.TestCase):
+    def test_repair_index_skips_filename_fallback_rollout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+            session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            rollout_path = sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            rollout_path.write_text(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": "Body"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["repair-index", "--dry-run", "--codex-home", str(codex_home)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("Missing session_index.jsonl entries: 0", output)
+            self.assertIn(
+                "Skipped rollout files without a canonical session id: 1",
+                output,
+            )
+            self.assertFalse((codex_home / "session_index.jsonl").exists())
+
     def test_repair_index_dry_run_reports_missing_entries_without_modifying_index(
         self,
     ) -> None:

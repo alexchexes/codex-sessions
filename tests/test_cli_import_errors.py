@@ -11,9 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codex_sessions.cli import main  # noqa: E402
+from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    session_id = session_id_from_path(path)
+    if session_id and (not records or records[0].get("type") != "session_meta"):
+        records = [{"type": "session_meta", "payload": {"id": session_id}}, *records]
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",
@@ -49,6 +53,31 @@ def import_user_message(content: str, timestamp: str) -> dict[str, Any]:
 
 
 class CliImportErrorTests(unittest.TestCase):
+    def test_import_rejects_filename_id_when_record_one_metadata_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            source_path = root / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            source_path.write_text(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": "Body"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_path)])
+
+            self.assertEqual(result, 1)
+            self.assertIn("Invalid Codex rollout identity", buffer.getvalue())
+            self.assertFalse((codex_home / "sessions").exists())
+
     def test_import_reports_missing_input_without_writing_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir) / "codex"
@@ -100,5 +129,6 @@ class CliImportErrorTests(unittest.TestCase):
             output = buffer.getvalue()
             self.assertEqual(result, 1)
             self.assertIn("Failed: 1", output)
-            self.assertIn("Cannot infer session id from rollout", output)
+            self.assertIn("Invalid Codex rollout identity", output)
+            self.assertIn("record 1 must be session_meta", output)
             self.assertFalse((codex_home / "session_index.jsonl").exists())

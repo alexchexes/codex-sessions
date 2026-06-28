@@ -25,7 +25,7 @@ class SessionCacheTests(unittest.TestCase):
     def test_session_cache_path_uses_codex_cache_directory(self) -> None:
         self.assertEqual(
             session_cache_path(Path("/tmp/codex")).as_posix(),
-            "/tmp/codex/cache/codex-sessions/sessions-v1.json",
+            "/tmp/codex/cache/codex-sessions/sessions-v2.json",
         )
 
     def test_read_session_cache_returns_entries_for_current_version(self) -> None:
@@ -46,7 +46,15 @@ class SessionCacheTests(unittest.TestCase):
     def test_read_session_cache_ignores_invalid_or_stale_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_path = Path(tmpdir) / "sessions.json"
-            cache_path.write_text('{"version":0,"entries":{"stale":{}}}', encoding="utf-8")
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": SESSION_CACHE_VERSION - 1,
+                        "entries": {"stale": {}},
+                    }
+                ),
+                encoding="utf-8",
+            )
             self.assertEqual(read_session_cache(cache_path), {})
 
             cache_path.write_text("not json", encoding="utf-8")
@@ -78,6 +86,7 @@ class SessionCacheTests(unittest.TestCase):
                 metadata_lines=(),
                 tool_input_lines=(),
                 tool_output_lines=(),
+                session_id_is_canonical=True,
             )
 
             entry = session_cache_entry_from_document(
@@ -91,6 +100,7 @@ class SessionCacheTests(unittest.TestCase):
             self.assertEqual(cached_entry.thread_name, document.thread_name)
             self.assertEqual(cached_entry.started_at, document.started_at)
             self.assertTrue(cached_entry.timestamps_scanned)
+            self.assertTrue(cached_entry.session_id_is_canonical)
             self.assertEqual(cached_file_fingerprint(entry, rollout_path, stat_result), fingerprint)
             self.assertEqual(session_cache_key(rollout_path), session_cache_key(rollout_path))
 
@@ -104,6 +114,9 @@ class SessionCacheTests(unittest.TestCase):
                 "size": stat_result.st_size,
                 "mtime_ns": stat_result.st_mtime_ns,
                 "sha256": None,
+                "session_id_is_canonical": False,
+                "identity_warning": None,
+                "identity_status": None,
             }
 
             self.assertIsNone(
@@ -140,6 +153,9 @@ class SessionCacheTests(unittest.TestCase):
                     "size": stat_result.st_size,
                     "mtime_ns": stat_result.st_mtime_ns,
                     "sha256": expected.sha256,
+                    "session_id_is_canonical": False,
+                    "identity_warning": None,
+                    "identity_status": None,
                 }
             }
 

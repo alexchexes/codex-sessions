@@ -12,9 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codex_sessions.cli import main  # noqa: E402
+from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    session_id = session_id_from_path(path)
+    if session_id and (not records or records[0].get("type") != "session_meta"):
+        records = [{"type": "session_meta", "payload": {"id": session_id}}, *records]
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",
@@ -50,6 +54,43 @@ def import_user_message(content: str, timestamp: str) -> dict[str, Any]:
 
 
 class CliRenameTests(unittest.TestCase):
+    def test_rename_refuses_filename_fallback_without_partial_index_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+            session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            index_path = codex_home / "session_index.jsonl"
+            write_jsonl(
+                index_path,
+                [{"id": session_id, "thread_name": "Original title"}],
+            )
+            rollout_path = sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            rollout_path.write_text(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": "Body"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(SystemExit) as raised:
+                main(
+                    [
+                        "rename",
+                        "--codex-home",
+                        str(codex_home),
+                        session_id,
+                        "New title",
+                    ]
+                )
+
+            self.assertIn("invalid canonical session metadata", str(raised.exception))
+            self.assertEqual(read_jsonl(index_path)[0]["thread_name"], "Original title")
+
     def test_rename_updates_index_and_resets_state_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
@@ -171,7 +212,7 @@ class CliRenameTests(unittest.TestCase):
             self.assertIn("From (rollout):", output)
             self.assertIn("Old rollout title", output)
             self.assertEqual(
-                rollout_records[0]["payload"]["thread_name"],
+                rollout_records[1]["payload"]["thread_name"],
                 "New title",
             )
             self.assertEqual(len(backup_dirs), 1)

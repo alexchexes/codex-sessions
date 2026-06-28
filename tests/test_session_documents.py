@@ -140,11 +140,11 @@ class SessionDocumentTests(unittest.TestCase):
             document = build_search_document(
                 rollout_path,
                 "...",
-                session_id_from_path=lambda _path: None,
                 render_line_groups=render_line_groups,
             )
 
         self.assertEqual(document.session_id, session_id)
+        self.assertTrue(document.session_id_is_canonical)
         self.assertEqual(document.thread_name, "Rollout title")
         self.assertEqual(
             document.started_at, datetime(2026, 4, 30, 18, 20, 39, tzinfo=timezone.utc)

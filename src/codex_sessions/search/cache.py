@@ -11,8 +11,8 @@ from codex_sessions.sessions.cache import (
 )
 from codex_sessions.sessions.documents import SearchDocument
 
-SEARCH_CACHE_VERSION = 4
-SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v4.json"
+SEARCH_CACHE_VERSION = 5
+SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v5.json"
 
 
 def search_cache_path(codex_home: Path) -> Path:
@@ -85,6 +85,9 @@ def cached_search_document(
         metadata_lines=metadata_lines,
         tool_input_lines=tool_input_lines,
         tool_output_lines=tool_output_lines,
+        session_id_is_canonical=metadata.session_id_is_canonical,
+        identity_warning=metadata.identity_warning,
+        identity_status=metadata.identity_status,
     )
 
 

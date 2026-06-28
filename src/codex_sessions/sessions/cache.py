@@ -9,8 +9,8 @@ from codex_sessions.core.timestamps import parse_timestamp
 from codex_sessions.sessions.documents import SearchDocument
 from codex_sessions.sessions.rollout import FileFingerprint, file_fingerprint
 
-SESSION_CACHE_VERSION = 1
-SESSION_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "sessions-v1.json"
+SESSION_CACHE_VERSION = 2
+SESSION_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "sessions-v2.json"
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,9 @@ class SessionCacheEntry:
     started_at: datetime | None
     ended_at: datetime | None
     timestamps_scanned: bool
+    session_id_is_canonical: bool
+    identity_warning: str | None
+    identity_status: str | None
 
 
 def session_cache_path(codex_home: Path) -> Path:
@@ -92,6 +95,15 @@ def cached_session_metadata(
     timestamps_scanned = entry.get("timestamps_scanned", False)
     if not isinstance(timestamps_scanned, bool):
         return None
+    session_id_is_canonical = entry.get("session_id_is_canonical")
+    if not isinstance(session_id_is_canonical, bool):
+        return None
+    identity_warning = entry.get("identity_warning")
+    if identity_warning is not None and not isinstance(identity_warning, str):
+        return None
+    identity_status = entry.get("identity_status")
+    if identity_status is not None and not isinstance(identity_status, str):
+        return None
 
     return SessionCacheEntry(
         path=path.resolve(),
@@ -103,6 +115,9 @@ def cached_session_metadata(
         started_at=parse_timestamp(entry.get("started_at")),
         ended_at=parse_timestamp(entry.get("ended_at")),
         timestamps_scanned=timestamps_scanned,
+        session_id_is_canonical=session_id_is_canonical,
+        identity_warning=identity_warning,
+        identity_status=identity_status,
     )
 
 
@@ -123,6 +138,9 @@ def session_cache_entry(
     started_at: datetime | None = None,
     ended_at: datetime | None = None,
     timestamps_scanned: bool = False,
+    session_id_is_canonical: bool = False,
+    identity_warning: str | None = None,
+    identity_status: str | None = None,
     fingerprint: FileFingerprint | None = None,
 ) -> dict[str, Any]:
     return {
@@ -135,6 +153,9 @@ def session_cache_entry(
         "started_at": started_at.isoformat() if started_at else None,
         "ended_at": ended_at.isoformat() if ended_at else None,
         "timestamps_scanned": timestamps_scanned,
+        "session_id_is_canonical": session_id_is_canonical,
+        "identity_warning": identity_warning,
+        "identity_status": identity_status,
     }
 
 
@@ -153,6 +174,9 @@ def session_cache_entry_from_document(
         started_at=document.started_at,
         ended_at=document.ended_at,
         timestamps_scanned=True,
+        session_id_is_canonical=document.session_id_is_canonical,
+        identity_warning=document.identity_warning,
+        identity_status=document.identity_status,
         fingerprint=fingerprint,
     )
 
@@ -194,6 +218,11 @@ def file_fingerprint_from_session_cache(
             started_at=metadata.started_at if metadata is not None else None,
             ended_at=metadata.ended_at if metadata is not None else None,
             timestamps_scanned=metadata.timestamps_scanned if metadata is not None else False,
+            session_id_is_canonical=(
+                metadata.session_id_is_canonical if metadata is not None else False
+            ),
+            identity_warning=metadata.identity_warning if metadata is not None else None,
+            identity_status=metadata.identity_status if metadata is not None else None,
             fingerprint=fingerprint,
         )
     return fingerprint, updated_stat_result, entries is not None

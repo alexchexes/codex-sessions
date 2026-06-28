@@ -15,9 +15,13 @@ from codex_sessions.cli import main  # noqa: E402
 from codex_sessions.sessions.files import (  # noqa: E402
     discover_session_files as real_discover_session_files,
 )
+from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    session_id = session_id_from_path(path)
+    if session_id and (not records or records[0].get("type") != "session_meta"):
+        records = [{"type": "session_meta", "payload": {"id": session_id}}, *records]
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",
@@ -53,6 +57,243 @@ def import_user_message(content: str, timestamp: str) -> dict[str, Any]:
 
 
 class CliSyncTests(unittest.TestCase):
+    def test_sync_upload_preserves_degraded_filename_id_rollout_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            sync_dir = root / "sync"
+            session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            source_path = (
+                codex_home
+                / "sessions"
+                / "2026"
+                / "04"
+                / "30"
+                / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            )
+            source_path.parent.mkdir(parents=True)
+            source_path.write_text(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": "Body"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            source_bytes = source_path.read_bytes()
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["sync", "--codex-home", str(codex_home), str(sync_dir)])
+
+            exported_paths = list(sync_dir.glob("*.jsonl"))
+            self.assertEqual(result, 0)
+            self.assertEqual(len(exported_paths), 1)
+            self.assertEqual(exported_paths[0].read_bytes(), source_bytes)
+            self.assertIn("using trailing filename session ID", buffer.getvalue())
+            self.assertIn(str(source_path), buffer.getvalue())
+
+            second_buffer = StringIO()
+            with redirect_stdout(second_buffer):
+                second_result = main(["sync", "--codex-home", str(codex_home), str(sync_dir)])
+
+            self.assertEqual(second_result, 1)
+            self.assertEqual(exported_paths[0].read_bytes(), source_bytes)
+            self.assertIn(
+                "Identical file already in sync folder (invalid session metadata): 1",
+                second_buffer.getvalue(),
+            )
+
+    def test_sync_upload_continues_after_no_id_failure_and_returns_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            sync_dir = root / "sync"
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+            valid_id = "11111111-2222-3333-4444-555555555555"
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-20-39-{valid_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "session_meta",
+                        "payload": {"id": valid_id},
+                    }
+                ],
+            )
+            invalid_path = sessions_day / "rollout-without-id.jsonl"
+            write_jsonl(
+                invalid_path,
+                [
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": "Preserve me"},
+                    }
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["sync", "--codex-home", str(codex_home), str(sync_dir)])
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 1)
+            self.assertEqual(len(list(sync_dir.glob("*.jsonl"))), 1)
+            self.assertIn("Exported local-only sessions: 1", output)
+            self.assertIn("Failed: 1", output)
+            self.assertIn(str(invalid_path), output)
+
+    def test_sync_reports_different_existing_degraded_backup_without_aborting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            sync_dir = root / "sync"
+            sync_dir.mkdir()
+            session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            source_path = (
+                codex_home
+                / "sessions"
+                / "2026"
+                / "04"
+                / "30"
+                / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            )
+            source_path.parent.mkdir(parents=True)
+            source_path.write_text(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": "Body"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            sync_path = sync_dir / f"2026-04-30--Body--{session_id}.jsonl"
+            sync_path.write_text(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": "Different"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            sync_bytes = sync_path.read_bytes()
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["sync", "--codex-home", str(codex_home), str(sync_dir)])
+
+            self.assertEqual(result, 1)
+            self.assertEqual(sync_path.read_bytes(), sync_bytes)
+            self.assertIn("Sync output already exists with different content", buffer.getvalue())
+
+    def test_sync_never_overwrites_valid_and_broken_rollouts_at_same_path(self) -> None:
+        session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        metadata_record = {
+            "timestamp": "2026-04-30T18:20:39Z",
+            "type": "session_meta",
+            "payload": {"id": session_id},
+        }
+        body_record = {
+            "timestamp": "2026-04-30T18:20:40Z",
+            "type": "response_item",
+            "payload": {"type": "message", "role": "user", "content": "Body"},
+        }
+
+        for local_valid, sync_valid in ((True, False), (False, True)):
+            with self.subTest(local_valid=local_valid, sync_valid=sync_valid):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    root = Path(tmpdir)
+                    codex_home = root / "codex"
+                    sync_dir = root / "sync"
+                    sync_dir.mkdir()
+                    local_path = (
+                        codex_home
+                        / "sessions"
+                        / "2026"
+                        / "04"
+                        / "30"
+                        / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+                    )
+                    local_path.parent.mkdir(parents=True)
+                    sync_path = sync_dir / f"2026-04-30--Body--{session_id}.jsonl"
+                    local_records = [metadata_record, body_record] if local_valid else [body_record]
+                    sync_records = [metadata_record, body_record] if sync_valid else [body_record]
+                    local_path.write_text(
+                        "".join(json.dumps(record) + "\n" for record in local_records),
+                        encoding="utf-8",
+                    )
+                    sync_path.write_text(
+                        "".join(json.dumps(record) + "\n" for record in sync_records),
+                        encoding="utf-8",
+                    )
+                    local_bytes = local_path.read_bytes()
+                    sync_bytes = sync_path.read_bytes()
+
+                    buffer = StringIO()
+                    with redirect_stdout(buffer):
+                        result = main(["sync", "--codex-home", str(codex_home), str(sync_dir)])
+
+                    self.assertEqual(result, 1)
+                    self.assertEqual(local_path.read_bytes(), local_bytes)
+                    self.assertEqual(sync_path.read_bytes(), sync_bytes)
+                    self.assertIn(
+                        "Sync output already exists with different content",
+                        buffer.getvalue(),
+                    )
+
+    def test_sync_uses_record_one_id_when_export_title_contains_another_uuid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            codex_home = root / "codex"
+            sync_dir = root / "sync"
+            sync_dir.mkdir()
+            referenced_id = "11111111-2222-3333-4444-555555555555"
+            actual_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            write_jsonl(
+                sync_dir / f"2026-04-30--Referenced--{referenced_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:20:39Z",
+                        "type": "session_meta",
+                        "payload": {"id": referenced_id},
+                    }
+                ],
+            )
+            write_jsonl(
+                sync_dir / f"2026-05-01--get-context-from-{referenced_id}--{actual_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-05-01T18:20:39Z",
+                        "type": "session_meta",
+                        "payload": {"id": actual_id},
+                    }
+                ],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(
+                    [
+                        "sync",
+                        "--dry-run",
+                        "--codex-home",
+                        str(codex_home),
+                        str(sync_dir),
+                    ]
+                )
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("Would add locally: 2", output)
+            self.assertIn("Duplicate input IDs: 0", output)
+
     def test_sync_dry_run_reports_download_and_upload_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

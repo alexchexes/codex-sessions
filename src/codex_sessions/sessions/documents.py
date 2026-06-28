@@ -7,14 +7,13 @@ from typing import Any
 
 from codex_sessions.core.json_streams import iter_jsonl_objects
 from codex_sessions.core.timestamps import parse_timestamp
+from codex_sessions.sessions.files import SessionIdentity, resolve_session_identity
 from codex_sessions.sessions.rollout import (
     thread_name_updated_matches_session,
     thread_name_updated_name,
-    thread_name_updated_session_id,
 )
 
 LineGroupRenderer = Callable[[dict[str, Any]], Iterable[tuple[str, Sequence[str]]]]
-SessionIdFromPath = Callable[[Path], str | None]
 MAX_INFERRED_TITLE_CHARS = 80
 MAX_INFERRED_TITLE_WORDS = 12
 
@@ -29,6 +28,9 @@ class SearchDocument:
     metadata_lines: tuple[str, ...]
     tool_input_lines: tuple[str, ...]
     tool_output_lines: tuple[str, ...]
+    session_id_is_canonical: bool = False
+    identity_warning: str | None = None
+    identity_status: str | None = None
 
     @property
     def tool_lines(self) -> tuple[str, ...]:
@@ -53,11 +55,11 @@ def build_search_document(
     input_path: Path,
     redaction: str,
     *,
-    session_id_from_path: SessionIdFromPath,
     render_line_groups: LineGroupRenderer,
 ) -> SearchDocument:
     """Extract one compact, de-duplicated searchable document from a rollout file."""
-    session_id = session_id_from_path(input_path)
+    identity: SessionIdentity | None = None
+    session_id: str | None = None
     thread_name: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
@@ -75,6 +77,9 @@ def build_search_document(
     }
 
     for _, raw_record in iter_jsonl_objects(input_path):
+        if identity is None:
+            identity = resolve_session_identity(input_path, raw_record)
+            session_id = identity.session_id
         record_timestamp = parse_timestamp(raw_record.get("timestamp"))
         if record_timestamp is not None:
             ended_at = record_timestamp
@@ -84,18 +89,7 @@ def build_search_document(
             started_at = record_timestamp
             if started_at is None and isinstance(payload, dict):
                 started_at = parse_timestamp(payload.get("timestamp"))
-        if (
-            session_id is None
-            and raw_record.get("type") == "session_meta"
-            and isinstance(payload, dict)
-        ):
-            payload_id = payload.get("id")
-            if isinstance(payload_id, str) and payload_id:
-                session_id = payload_id
         if raw_record.get("type") == "event_msg" and isinstance(payload, dict):
-            event_session_id = thread_name_updated_session_id(payload)
-            if session_id is None and event_session_id:
-                session_id = event_session_id
             if thread_name_updated_matches_session(payload, session_id):
                 event_thread_name = thread_name_updated_name(payload)
                 if event_thread_name:
@@ -111,6 +105,10 @@ def build_search_document(
                     seen_lines[normalized_group].add(line)
                     line_groups[normalized_group].append(line)
 
+    if identity is None:
+        identity = resolve_session_identity(input_path, None)
+        session_id = identity.session_id
+
     return SearchDocument(
         session_id=session_id,
         thread_name=thread_name,
@@ -120,6 +118,9 @@ def build_search_document(
         metadata_lines=tuple(line_groups["metadata"]),
         tool_input_lines=tuple(line_groups["tool_inputs"]),
         tool_output_lines=tuple(line_groups["tool_outputs"]),
+        session_id_is_canonical=identity.is_canonical,
+        identity_warning=identity.warning,
+        identity_status=identity.status,
     )
 
 

@@ -28,6 +28,7 @@ class SessionDisplayInfo:
     ended_at: datetime | None = None
     relative_path: str | None = None
     status: str | None = None
+    identity_status: str | None = None
 
     @property
     def identifier(self) -> str | None:
@@ -86,6 +87,8 @@ def format_session_display_info(info: SessionDisplayInfo) -> str:
         parts.append(info.title)
     if info.status:
         parts.append(info.status)
+    if info.identity_status:
+        parts.append(info.identity_status)
     return " - ".join(parts)
 
 
@@ -105,6 +108,7 @@ def indexed_session_display_info(
         started_at=session_file.started_at,
         ended_at=session_file.ended_at,
         relative_path=session_file.relative_path,
+        identity_status=session_file.identity_status,
     )
 
 
@@ -118,6 +122,7 @@ def unindexed_session_display_info(
             title=None,
             relative_path=session_file.relative_path,
             status=NO_SESSION_INDEX_ENTRY,
+            identity_status=session_file.identity_status,
         )
     return SessionDisplayInfo(
         session_id=session_file.session_id,
@@ -126,6 +131,7 @@ def unindexed_session_display_info(
         ended_at=session_file.ended_at,
         relative_path=session_file.relative_path,
         status=NO_SESSION_INDEX_ENTRY,
+        identity_status=session_file.identity_status,
     )
 
 
@@ -259,4 +265,8 @@ def styled_session_display_text(
         if rendered:
             append_session_separator(rendered, encoding)
         append_encoded(rendered, info.status, encoding, style=SESSION_STATUS_STYLE)
+    if info.identity_status:
+        if rendered:
+            append_session_separator(rendered, encoding)
+        append_encoded(rendered, info.identity_status, encoding, style=SESSION_STATUS_STYLE)
     return rendered

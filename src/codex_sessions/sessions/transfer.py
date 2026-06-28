@@ -40,7 +40,9 @@ from codex_sessions.sessions.documents import (
 )
 from codex_sessions.sessions.files import (
     SessionFile,
+    SessionIdentity,
     discover_session_files,
+    resolve_session_identity,
     session_id_from_path,
 )
 from codex_sessions.sessions.index import (
@@ -65,6 +67,7 @@ from codex_sessions.sessions.manifest import (
     read_zip_manifest,
 )
 from codex_sessions.sessions.rollout import (
+    ExportFailure,
     ExportSessionPlan,
     ExportSessionResult,
     ExportSessionsPlan,
@@ -94,7 +97,6 @@ from codex_sessions.sessions.rollout import (
     rollout_filename_date,
     thread_name_updated_matches_session,
     thread_name_updated_name,
-    thread_name_updated_session_id,
     write_rollout_records,
 )
 from codex_sessions.sessions.rollout_history import (
@@ -233,7 +235,8 @@ def search_document_for_path(
 
 
 def build_transfer_document(input_path: Path) -> SearchDocument:
-    session_id = session_id_from_path(input_path)
+    identity: SessionIdentity | None = None
+    session_id: str | None = None
     thread_name: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
@@ -241,6 +244,9 @@ def build_transfer_document(input_path: Path) -> SearchDocument:
     first_codex_line: str | None = None
 
     for _, raw_record in iter_jsonl_objects(input_path):
+        if identity is None:
+            identity = resolve_session_identity(input_path, raw_record)
+            session_id = identity.session_id
         record_timestamp = parse_timestamp(raw_record.get("timestamp"))
         if record_timestamp is not None:
             ended_at = record_timestamp
@@ -250,18 +256,7 @@ def build_transfer_document(input_path: Path) -> SearchDocument:
             started_at = record_timestamp
             if started_at is None and isinstance(payload, dict):
                 started_at = parse_timestamp(payload.get("timestamp"))
-        if (
-            session_id is None
-            and raw_record.get("type") == "session_meta"
-            and isinstance(payload, dict)
-        ):
-            payload_id = payload.get("id")
-            if isinstance(payload_id, str) and payload_id:
-                session_id = payload_id
         if raw_record.get("type") == "event_msg" and isinstance(payload, dict):
-            event_session_id = thread_name_updated_session_id(payload)
-            if session_id is None and event_session_id:
-                session_id = event_session_id
             if thread_name_updated_matches_session(payload, session_id):
                 event_thread_name = thread_name_updated_name(payload)
                 if event_thread_name:
@@ -284,6 +279,10 @@ def build_transfer_document(input_path: Path) -> SearchDocument:
                     ):
                         first_codex_line = line
 
+    if identity is None:
+        identity = resolve_session_identity(input_path, None)
+        session_id = identity.session_id
+
     return SearchDocument(
         session_id=session_id,
         thread_name=thread_name,
@@ -295,7 +294,19 @@ def build_transfer_document(input_path: Path) -> SearchDocument:
         metadata_lines=(),
         tool_input_lines=(),
         tool_output_lines=(),
+        session_id_is_canonical=identity.is_canonical,
+        identity_warning=identity.warning,
+        identity_status=identity.status,
     )
+
+
+def require_canonical_session_id(document: SearchDocument, path: Path) -> str:
+    if document.session_id is not None and document.session_id_is_canonical:
+        return document.session_id
+    detail = document.identity_warning or (
+        "record 1 must be session_meta with a valid UUID payload.id"
+    )
+    raise CliError(f"Invalid Codex rollout identity: {path}: {detail}")
 
 
 def write_local_fingerprint_cache(cache: LocalFingerprintCache | None) -> None:
@@ -390,7 +401,12 @@ def import_target_date(source_path: Path, document: SearchDocument) -> tuple[str
 def import_target_filename(source_path: Path, document: SearchDocument) -> str:
     if document.session_id is None:
         raise CliError(f"Cannot infer session id from rollout: {source_path}")
-    if source_path.name.startswith("rollout-") and session_id_from_path(source_path):
+    filename_id = session_id_from_path(source_path)
+    if (
+        source_path.name.startswith("rollout-")
+        and filename_id is not None
+        and normalize_session_id(filename_id) == normalize_session_id(document.session_id)
+    ):
         return source_path.name
     if document.started_at is None:
         raise CliError(
@@ -484,13 +500,12 @@ def plan_bare_rollout_import(
 
     resolved_sessions_dir = sessions_dir or codex_home / "sessions"
     document = search_document_for_path(expanded_source_path, document_cache)
-    if document.session_id is None:
-        raise CliError(f"Cannot infer session id from rollout: {source_path}")
+    session_id = require_canonical_session_id(document, expanded_source_path)
 
     target_path = import_target_path(expanded_source_path, resolved_sessions_dir, document)
     source_fingerprint = source_rollout_fingerprint(expanded_source_path, source_fingerprints)
     existing_files = existing_session_files_for_id(
-        document.session_id,
+        session_id,
         resolved_sessions_dir,
         session_files_by_id=local_session_files_by_id,
     )
@@ -502,41 +517,42 @@ def plan_bare_rollout_import(
     )
 
     if existing_rollout_path is not None:
+        existing_document = search_document_for_path(existing_rollout_path, document_cache)
+        require_canonical_session_id(existing_document, existing_rollout_path)
         if source_fingerprint == existing_rollout_fingerprint:
             raise ImportSkippedIdentical(
                 source_path=expanded_source_path,
                 existing_path=existing_rollout_path,
-                session_id=document.session_id,
+                session_id=session_id,
                 fingerprint=source_fingerprint,
             )
         if existing_rollout_fingerprint is None:
             raise CliError(
                 f"Could not fingerprint existing Codex rollout file: {existing_rollout_path}"
             )
-        existing_document = search_document_for_path(existing_rollout_path, document_cache)
         raise ImportRolloutConflict(
             source_path=expanded_source_path,
             existing_path=existing_rollout_path,
-            session_id=document.session_id,
+            session_id=session_id,
             source_fingerprint=source_fingerprint,
             existing_fingerprint=existing_rollout_fingerprint,
             source_side=import_session_side(
                 expanded_source_path,
                 document,
                 source_fingerprint,
-                session_id=document.session_id,
+                session_id=session_id,
             ),
             existing_side=import_session_side(
                 existing_rollout_path,
                 existing_document,
                 existing_rollout_fingerprint,
-                session_id=document.session_id,
+                session_id=session_id,
             ),
         )
 
     index_path = session_index_path or codex_home / "session_index.jsonl"
     index_records = session_index_records(index_path) if index_path.exists() else []
-    existing_index_match = existing_index_record_for_id(index_records, document.session_id)
+    existing_index_match = existing_index_record_for_id(index_records, session_id)
     existing_index_thread_name = (
         session_index_record_thread_name(existing_index_match[1])
         if existing_index_match is not None
@@ -560,14 +576,14 @@ def plan_bare_rollout_import(
         index_action = "keep"
 
     _, rollout_will_be_rewritten = prepare_import_rollout_records(
-        expanded_source_path, document.session_id, normalized_name
+        expanded_source_path, session_id, normalized_name
     )
 
     return ImportSessionPlan(
         source_path=expanded_source_path,
         target_path=target_path,
         session_index_path=index_path,
-        session_id=document.session_id,
+        session_id=session_id,
         thread_name=normalized_name,
         started_at=document.started_at,
         ended_at=document.ended_at,
@@ -589,12 +605,13 @@ def plan_fast_forward_rollout_import(
     document_cache: dict[Path, SearchDocument] | None = None,
 ) -> ImportSessionPlan:
     document = search_document_for_path(source_path, document_cache)
-    if document.session_id is None:
-        raise CliError(f"Cannot infer session id from rollout: {source_path}")
+    session_id = require_canonical_session_id(document, source_path)
+    existing_document = search_document_for_path(existing_path, document_cache)
+    require_canonical_session_id(existing_document, existing_path)
 
     index_path = session_index_path or codex_home / "session_index.jsonl"
     index_records = session_index_records(index_path) if index_path.exists() else []
-    existing_index_match = existing_index_record_for_id(index_records, document.session_id)
+    existing_index_match = existing_index_record_for_id(index_records, session_id)
     existing_index_thread_name = (
         session_index_record_thread_name(existing_index_match[1])
         if existing_index_match is not None
@@ -608,21 +625,20 @@ def plan_fast_forward_rollout_import(
     elif existing_index_thread_name:
         normalized_name = existing_index_thread_name
     else:
-        existing_document = search_document_for_path(existing_path, document_cache)
         normalized_name = existing_document.thread_name or inferred_thread_name(document)
     if not normalized_name:
         raise CliError("Imported session title must not be empty.")
 
     index_action = "add" if existing_index_match is None else "advance"
     _, rollout_will_be_rewritten = prepare_import_rollout_records(
-        source_path, document.session_id, normalized_name
+        source_path, session_id, normalized_name
     )
 
     return ImportSessionPlan(
         source_path=source_path,
         target_path=existing_path,
         session_index_path=index_path,
-        session_id=document.session_id,
+        session_id=session_id,
         thread_name=normalized_name,
         started_at=document.started_at,
         ended_at=document.ended_at,
@@ -1333,6 +1349,7 @@ def export_session_candidates(
     sessions_dir: Path | None = None,
     *,
     document_cache: dict[Path, SearchDocument] | None = None,
+    failures: list[ExportFailure] | None = None,
 ) -> list[ExportSessionCandidate]:
     resolved_sessions_dir = sessions_dir or codex_home / "sessions"
     if not resolved_sessions_dir.exists():
@@ -1353,10 +1370,34 @@ def export_session_candidates(
     duplicate_sources_by_id: dict[str, list[Path]] = {}
     for session_file in discover_session_files(resolved_sessions_dir):
         source_path = session_file.path.resolve()
-        document = search_document_for_path(source_path, document_cache)
-        session_id = document.session_id or session_file.session_id
+        try:
+            document = search_document_for_path(source_path, document_cache)
+        except (OSError, ValueError) as exc:
+            if failures is None:
+                raise
+            failures.append(
+                ExportFailure(
+                    source_path=source_path,
+                    message=str(exc),
+                    started_at=session_file.started_at,
+                    ended_at=session_file.ended_at,
+                )
+            )
+            continue
+        session_id = document.session_id
         if session_id is None:
-            raise CliError(f"Cannot infer session id from rollout: {source_path}")
+            message = document.identity_warning or "Cannot infer session id from rollout"
+            if failures is None:
+                raise CliError(f"Cannot export rollout: {source_path}: {message}")
+            failures.append(
+                ExportFailure(
+                    source_path=source_path,
+                    message=message,
+                    started_at=document.started_at,
+                    ended_at=document.ended_at,
+                )
+            )
+            continue
         normalized_id = normalize_session_id(session_id)
         index_record = index_records_by_id.get(normalized_id)
         index_thread_name = (
@@ -1449,6 +1490,24 @@ def export_candidate_updated_at(candidate: ExportSessionCandidate) -> datetime |
     return candidate.document.ended_at or candidate.document.started_at
 
 
+def export_timestamp_values_match_filters(
+    *,
+    started_at: datetime | None,
+    updated_at: datetime | None,
+    started_after: datetime | None,
+    started_before: datetime | None,
+    updated_after: datetime | None,
+    updated_before: datetime | None,
+) -> bool:
+    if started_after is not None and (started_at is None or started_at < started_after):
+        return False
+    if started_before is not None and (started_at is None or started_at >= started_before):
+        return False
+    if updated_after is not None and (updated_at is None or updated_at < updated_after):
+        return False
+    return not (updated_before is not None and (updated_at is None or updated_at >= updated_before))
+
+
 def export_candidate_matches_timestamp_filters(
     candidate: ExportSessionCandidate,
     *,
@@ -1457,16 +1516,36 @@ def export_candidate_matches_timestamp_filters(
     updated_after: datetime | None,
     updated_before: datetime | None,
 ) -> bool:
-    started_at = candidate.document.started_at
-    updated_at = export_candidate_updated_at(candidate)
+    return export_timestamp_values_match_filters(
+        started_at=candidate.document.started_at,
+        updated_at=export_candidate_updated_at(candidate),
+        started_after=started_after,
+        started_before=started_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+    )
 
-    if started_after is not None and (started_at is None or started_at < started_after):
-        return False
-    if started_before is not None and (started_at is None or started_at >= started_before):
-        return False
-    if updated_after is not None and (updated_at is None or updated_at < updated_after):
-        return False
-    return not (updated_before is not None and (updated_at is None or updated_at >= updated_before))
+
+def export_failure_updated_at(failure: ExportFailure) -> datetime | None:
+    return failure.ended_at or failure.started_at
+
+
+def export_failure_matches_timestamp_filters(
+    failure: ExportFailure,
+    *,
+    started_after: datetime | None,
+    started_before: datetime | None,
+    updated_after: datetime | None,
+    updated_before: datetime | None,
+) -> bool:
+    return export_timestamp_values_match_filters(
+        started_at=failure.started_at,
+        updated_at=export_failure_updated_at(failure),
+        started_after=started_after,
+        started_before=started_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+    )
 
 
 def selected_export_candidates(
@@ -1482,7 +1561,7 @@ def selected_export_candidates(
     started_before: datetime | None,
     updated_after: datetime | None,
     updated_before: datetime | None,
-) -> tuple[list[ExportSessionCandidate], int]:
+) -> tuple[list[ExportSessionCandidate], int, list[ExportFailure]]:
     if targets and only:
         raise CliError("Use either positional export targets or --only, not both.")
     if all_sessions and (targets or only):
@@ -1492,10 +1571,12 @@ def selected_export_candidates(
         timestamp is not None
         for timestamp in (started_after, started_before, updated_after, updated_before)
     )
+    discovery_failures: list[ExportFailure] = []
     candidates = export_session_candidates(
         codex_home=codex_home,
         session_index_path=session_index_path,
         sessions_dir=sessions_dir,
+        failures=discovery_failures,
     )
     selector_targets = tuple(targets or only)
     if selector_targets:
@@ -1527,7 +1608,27 @@ def selected_export_candidates(
             updated_before=updated_before,
         )
     ]
-    return selected_candidates, len(base_candidates) - len(selected_candidates)
+    if selector_targets:
+        selected_failures = []
+    elif has_timestamp_filters:
+        selected_failures = [
+            failure
+            for failure in discovery_failures
+            if export_failure_matches_timestamp_filters(
+                failure,
+                started_after=started_after,
+                started_before=started_before,
+                updated_after=updated_after,
+                updated_before=updated_before,
+            )
+        ]
+    else:
+        selected_failures = discovery_failures
+    return (
+        selected_candidates,
+        len(base_candidates) - len(selected_candidates),
+        selected_failures,
+    )
 
 
 def export_output_kind(output: Path | None, session_count: int) -> str:
@@ -1562,9 +1663,11 @@ def export_plan_for_candidate(
     check_output_file: bool,
 ) -> ExportSessionPlan:
     source_path = candidate.source_path.resolve()
-    _, rollout_will_be_rewritten = prepare_import_rollout_records(
-        source_path, candidate.session_id, candidate.thread_name
-    )
+    rollout_will_be_rewritten = False
+    if candidate.document.session_id_is_canonical:
+        _, rollout_will_be_rewritten = prepare_import_rollout_records(
+            source_path, candidate.session_id, candidate.thread_name
+        )
     output_exists = output_path.exists() if check_output_file else False
     if check_output_file and output_exists:
         if output_path.resolve() == source_path:
@@ -1581,6 +1684,12 @@ def export_plan_for_candidate(
         ended_at=candidate.document.ended_at,
         rollout_will_be_rewritten=rollout_will_be_rewritten,
         overwrite=output_exists,
+        identity_status=candidate.document.identity_status,
+        warnings=(
+            (f"{source_path}: {candidate.document.identity_warning}",)
+            if candidate.document.identity_warning is not None
+            else ()
+        ),
     )
 
 
@@ -1614,7 +1723,7 @@ def plan_sessions_export(
 ) -> ExportSessionsPlan:
     resolved_sessions_dir = sessions_dir or codex_home / "sessions"
     index_path = session_index_path or codex_home / "session_index.jsonl"
-    selected_candidates, filtered_out_count = selected_export_candidates(
+    selected_candidates, filtered_out_count, failures = selected_export_candidates(
         targets=targets,
         only=only,
         exclude=exclude,
@@ -1627,7 +1736,7 @@ def plan_sessions_export(
         updated_after=export_filter_timestamp(updated_after, "--updated-after"),
         updated_before=export_filter_timestamp(updated_before, "--updated-before"),
     )
-    if not selected_candidates:
+    if not selected_candidates and not failures:
         raise CliError("No sessions matched export selection.")
     if output is None and (all_sessions or (not targets and not only)):
         raise CliError("Bulk export requires --output/-o with a directory or .zip path.")
@@ -1649,6 +1758,7 @@ def plan_sessions_export(
         )
         for candidate in selected_candidates
     )
+    warnings = tuple(warning for plan in plans for warning in plan.warnings)
 
     return ExportSessionsPlan(
         session_plans=plans,
@@ -1656,6 +1766,8 @@ def plan_sessions_export(
         output_path=output_path,
         force=force,
         filtered_out_count=filtered_out_count,
+        failures=tuple(failures),
+        warnings=warnings,
     )
 
 
@@ -1680,7 +1792,9 @@ def plan_session_export(
     session_file = resolve_single_session_file_for_export(session_id, resolved_sessions_dir)
     source_path = session_file.path.resolve()
     document = search_document_for_path(source_path)
-    resolved_session_id = document.session_id or session_file.session_id or session_id
+    resolved_session_id = document.session_id or session_file.session_id
+    if resolved_session_id is None:
+        raise CliError(f"Cannot infer session id from rollout: {source_path}")
     index_thread_name = (
         session_index_record_thread_name(index_record) if index_record is not None else ""
     )
@@ -1688,9 +1802,11 @@ def plan_session_export(
     if not thread_name:
         raise CliError("Exported session title must not be empty.")
 
-    _, rollout_will_be_rewritten = prepare_import_rollout_records(
-        source_path, resolved_session_id, thread_name
-    )
+    rollout_will_be_rewritten = False
+    if document.session_id_is_canonical:
+        _, rollout_will_be_rewritten = prepare_import_rollout_records(
+            source_path, resolved_session_id, thread_name
+        )
     output_path = resolve_export_output_path(
         output, default_export_filename(source_path, document, resolved_session_id, thread_name)
     )
@@ -1709,6 +1825,12 @@ def plan_session_export(
         ended_at=document.ended_at,
         rollout_will_be_rewritten=rollout_will_be_rewritten,
         overwrite=output_path.exists(),
+        identity_status=document.identity_status,
+        warnings=(
+            (f"{source_path}: {document.identity_warning}",)
+            if document.identity_warning is not None
+            else ()
+        ),
     )
 
 
@@ -1924,43 +2046,74 @@ def plan_missing_sessions_export_to_directory(
     document_cache: dict[Path, SearchDocument] | None = None,
 ) -> ExportSessionsPlan:
     resolved_sessions_dir = sessions_dir or codex_home / "sessions"
-    output_path = output.expanduser()
+    output_dir = output.expanduser()
     if not resolved_sessions_dir.exists():
         return ExportSessionsPlan(
             session_plans=(),
             output_kind=EXPORT_OUTPUT_DIRECTORY,
-            output_path=output_path,
+            output_path=output_dir,
             force=False,
             filtered_out_count=0,
         )
 
     index_path = session_index_path or codex_home / "session_index.jsonl"
+    failures: list[ExportFailure] = []
     candidates = export_session_candidates(
         codex_home=codex_home,
         session_index_path=index_path,
         sessions_dir=resolved_sessions_dir,
         document_cache=document_cache,
+        failures=failures,
     )
     selected_candidates = [
         candidate
         for candidate in candidates
         if normalize_session_id(candidate.session_id) not in excluded_session_ids
     ]
-    plans = tuple(
-        export_plan_for_candidate(
-            candidate,
-            export_output_path_for_candidate(candidate, output_path, EXPORT_OUTPUT_DIRECTORY),
-            force=False,
-            check_output_file=True,
+    plans: list[ExportSessionPlan] = []
+    already_exported_count = 0
+    for candidate in selected_candidates:
+        candidate_output_path = export_output_path_for_candidate(
+            candidate, output_dir, EXPORT_OUTPUT_DIRECTORY
         )
-        for candidate in selected_candidates
-    )
+        candidate_plan = export_plan_for_candidate(
+            candidate,
+            candidate_output_path,
+            force=False,
+            check_output_file=False,
+        )
+        if candidate_output_path.exists():
+            try:
+                intended_fingerprint = file_fingerprint_from_bytes(
+                    export_plan_jsonl_bytes(candidate_plan)
+                )
+                if intended_fingerprint == file_fingerprint(candidate_output_path):
+                    already_exported_count += 1
+                    continue
+            except (OSError, ValueError) as exc:
+                failures.append(ExportFailure(source_path=candidate.source_path, message=str(exc)))
+                continue
+            failures.append(
+                ExportFailure(
+                    source_path=candidate.source_path,
+                    message=(
+                        "Sync output already exists with different content: "
+                        f"{candidate_output_path}"
+                    ),
+                )
+            )
+            continue
+        plans.append(candidate_plan)
+    warnings = tuple(warning for plan in plans for warning in plan.warnings)
     return ExportSessionsPlan(
-        session_plans=plans,
+        session_plans=tuple(plans),
         output_kind=EXPORT_OUTPUT_DIRECTORY,
-        output_path=output_path,
+        output_path=output_dir,
         force=False,
         filtered_out_count=len(candidates) - len(selected_candidates),
+        already_present_count=already_exported_count,
+        failures=tuple(failures),
+        warnings=warnings,
     )
 
 

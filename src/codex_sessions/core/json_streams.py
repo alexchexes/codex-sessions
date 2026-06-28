@@ -36,6 +36,8 @@ def parse_jsonl_line(
         obj = json.loads(stripped)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON on line {line_number} of {input_path}: {exc}") from exc
+    if not isinstance(obj, dict):
+        raise ValueError(f"Expected JSON object on line {line_number} of {input_path}")
     return line_number, obj
 
 

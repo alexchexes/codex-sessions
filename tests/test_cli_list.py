@@ -2,7 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -18,10 +18,14 @@ from codex_sessions.sessions.display import (  # noqa: E402
     format_local_timestamp,
     local_timezone_offset_label,
 )
+from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
 from codex_sessions.sessions.index_workflows import list_session_lines  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    session_id = session_id_from_path(path)
+    if session_id and (not records or records[0].get("type") != "session_meta"):
+        records = [{"type": "session_meta", "payload": {"id": session_id}}, *records]
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",
@@ -57,6 +61,69 @@ def import_user_message(content: str, timestamp: str) -> dict[str, Any]:
 
 
 class CliListTests(unittest.TestCase):
+    def test_list_marks_filename_fallback_on_affected_session_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+            session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Damaged rollout"}],
+            )
+            rollout_path = sessions_day / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            rollout_path.write_text(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": "Body"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                result = main(["list", "--codex-home", str(codex_home)])
+
+            self.assertEqual(result, 0)
+            self.assertIn(
+                "INVALID RECORD-1 session_meta; USING ID FROM FILENAME",
+                stdout.getvalue(),
+            )
+            self.assertIn(str(rollout_path.relative_to(codex_home / "sessions")), stderr.getvalue())
+            self.assertIn("using trailing filename session ID", stderr.getvalue())
+
+    def test_list_marks_filename_metadata_id_mismatch_on_affected_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            sessions_day.mkdir(parents=True)
+            metadata_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            filename_id = "11111111-2222-3333-4444-555555555555"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": metadata_id, "thread_name": "Canonical metadata"}],
+            )
+            rollout_path = sessions_day / f"rollout-2026-04-30T18-20-39-{filename_id}.jsonl"
+            write_jsonl(
+                rollout_path,
+                [{"type": "session_meta", "payload": {"id": metadata_id}}],
+            )
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                result = main(["list", "--codex-home", str(codex_home)])
+
+            self.assertEqual(result, 0)
+            self.assertIn(metadata_id, stdout.getvalue())
+            self.assertIn("FILENAME ID MISMATCH", stdout.getvalue())
+            self.assertIn(filename_id, stderr.getvalue())
+            self.assertIn(metadata_id, stderr.getvalue())
+
     def test_list_sessions_cross_checks_index_and_session_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
@@ -111,7 +178,10 @@ class CliListTests(unittest.TestCase):
                         "Add scope for type casting types"
                     ),
                     f"{missing_file_id} - Missing rollout - NO ROLLOUT FILE",
-                    f"2026/04/30/{orphan_path.name} - NO ENTRY IN session_index.jsonl",
+                    (
+                        f"2026/04/30/{orphan_path.name} - NO ENTRY IN session_index.jsonl - "
+                        "INVALID RECORD-1 session_meta; USING ID FROM FILENAME"
+                    ),
                 ],
             )
 

@@ -12,9 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codex_sessions.cli import main  # noqa: E402
+from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    session_id = session_id_from_path(path)
+    if session_id and (not records or records[0].get("type") != "session_meta"):
+        records = [{"type": "session_meta", "payload": {"id": session_id}}, *records]
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",
@@ -98,9 +102,9 @@ class CliExportSingleTests(unittest.TestCase):
             self.assertIn(f"{session_id} - Index title for export", output)
             self.assertTrue(exported_path.exists())
             self.assertEqual(
-                exported_records[0]["payload"]["thread_name"], "Index title for export"
+                exported_records[1]["payload"]["thread_name"], "Index title for export"
             )
-            self.assertEqual(source_records[0]["payload"]["thread_name"], "Old rollout title")
+            self.assertEqual(source_records[1]["payload"]["thread_name"], "Old rollout title")
             self.assertEqual(rollout_path.read_text(encoding="utf-8"), original_rollout)
 
     def test_export_by_exact_title_to_explicit_file_copies_unchanged_rollout(self) -> None:

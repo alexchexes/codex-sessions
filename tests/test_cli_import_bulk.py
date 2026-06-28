@@ -17,9 +17,13 @@ from codex_sessions.sessions.cache import (  # noqa: E402
     read_session_cache,
     session_cache_path,
 )
+from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    session_id = session_id_from_path(path)
+    if session_id and (not records or records[0].get("type") != "session_meta"):
+        records = [{"type": "session_meta", "payload": {"id": session_id}}, *records]
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",
@@ -211,6 +215,7 @@ class CliImportBulkTests(unittest.TestCase):
             first_id = "49494949-4949-4949-4949-494949494949"
             second_id = "50505050-5050-5050-5050-505050505050"
             first_records = [
+                {"type": "session_meta", "payload": {"id": first_id}},
                 {
                     "timestamp": "2026-04-30T18:20:39Z",
                     "type": "event_msg",
@@ -219,9 +224,10 @@ class CliImportBulkTests(unittest.TestCase):
                         "thread_id": first_id,
                         "thread_name": "First zip import",
                     },
-                }
+                },
             ]
             second_records = [
+                {"type": "session_meta", "payload": {"id": second_id}},
                 {
                     "timestamp": "2026-05-01T18:20:39Z",
                     "type": "event_msg",
@@ -230,7 +236,7 @@ class CliImportBulkTests(unittest.TestCase):
                         "thread_id": second_id,
                         "thread_name": "Second zip import",
                     },
-                }
+                },
             ]
             with zipfile.ZipFile(source_zip, "w") as archive:
                 archive.writestr(
@@ -302,6 +308,7 @@ class CliImportBulkTests(unittest.TestCase):
                 ],
             )
             incoming_records = [
+                {"type": "session_meta", "payload": {"id": session_id}},
                 import_title_record(
                     session_id, "Incoming zip cache conflict", "2026-04-30T18:20:38Z"
                 ),
@@ -505,7 +512,8 @@ class CliImportBulkTests(unittest.TestCase):
             source_zip = root / "incoming.zip"
             session_id = "53535353-6767-6767-6767-676767676767"
             records = [
-                import_title_record(session_id, "Zip bad manifest import", "2026-04-30T18:20:38Z")
+                {"type": "session_meta", "payload": {"id": session_id}},
+                import_title_record(session_id, "Zip bad manifest import", "2026-04-30T18:20:38Z"),
             ]
             with zipfile.ZipFile(source_zip, "w") as archive:
                 archive.writestr("codex-sessions-manifest-v1.json", "{not valid json")

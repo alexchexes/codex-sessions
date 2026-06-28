@@ -252,6 +252,9 @@ Use a specific Codex home directory:
 codex-sessions list --codex-home ~/.codex
 ```
 
+`list` and `find` flag rollouts whose stored session ID is missing or disagrees with the filename;
+read-only inspection can continue, but state-changing commands may refuse them.
+
 #### Repair Codex's index file
 
 Preview missing `session_index.jsonl` entries inferred from rollout files:
@@ -266,7 +269,7 @@ Apply those repairs:
 codex-sessions repair-index
 ```
 
-`repair-index --dry-run` does not modify Codex state. The real repair command backs up `session_index.jsonl` under `backups/codex-sessions/`, appends missing entries, and resets Codex state cache by moving root `state_*.sqlite*` files into the same backup folder. If state cache reset is blocked by a running Codex session, the repaired index stays written and the command prompts for a retry in an interactive terminal.
+`repair-index --dry-run` does not modify Codex state. The real repair command backs up `session_index.jsonl` under `backups/codex-sessions/`, appends missing entries, and resets Codex state cache by moving root `state_*.sqlite*` files into the same backup folder. Rollouts without a valid authoritative record-1 ID are warned about and skipped rather than indexed from a filename fallback. If state cache reset is blocked by a running Codex session, the repaired index stays written and the command prompts for a retry in an interactive terminal.
 
 ### Rename sessions
 
@@ -276,7 +279,7 @@ Rename a session in `session_index.jsonl`:
 codex-sessions rename 019dd5ce-19e1-78c3-9313-325228ddd983 "Better session title"
 ```
 
-`rename` also updates the rollout `thread_name_updated` event when a rollout file is available, backs up changed files under `backups/codex-sessions/`, and resets Codex state cache. You can use an exact current title instead of an ID, but if multiple sessions have that title the command will ask you to rerun with one concrete ID.
+`rename` also updates the rollout `thread_name_updated` event when a rollout file is available, backs up changed files under `backups/codex-sessions/`, and resets Codex state cache. It refuses to modify a rollout whose record-1 session metadata is invalid. You can use an exact current title instead of an ID, but if multiple sessions have that title the command will ask you to rerun with one concrete ID.
 
 ### Export sessions
 
@@ -306,7 +309,9 @@ codex-sessions export --updated-after 2026-05-01 -o ./exports.zip
 codex-sessions export --all --except 019ddf68-2bc0-75e2-aecb-22f49ca63c98 -o ./exports/
 ```
 
-`export` writes a rollout copy without changing Codex state. If the current `session_index.jsonl` title differs from the rollout title event, the exported copy is updated so `import` can preserve that title on another machine. Existing output files, colliding directory entries, and existing zip archives are refused unless `--force` is passed.
+`export` writes a rollout copy without changing Codex state. If the current `session_index.jsonl` title differs from the rollout title event, the exported copy is updated so `import` can preserve that title on another machine.
+
+For backup safety, a damaged rollout with a usable trailing filename UUID is still exported, but its bytes are copied unchanged and a warning identifies the fallback. Import remains strict, so that backup must be repaired before it can be imported. A rollout with no usable metadata or filename ID is reported as a per-file failure. Bulk export continues with other files and returns status `1` when the resulting backup is incomplete; warnings for successfully copied degraded files do not change the success status. Existing output files, colliding directory entries, and existing zip archives are refused unless `--force` is passed.
 
 ### Import sessions
 
@@ -330,7 +335,7 @@ Allow an existing local session to fast-forward when the imported rollout is saf
 codex-sessions import --merge ./exports.zip
 ```
 
-`import` copies new rollouts into `sessions/YYYY/MM/DD/`, adds or updates the matching `session_index.jsonl` entries when needed, updates rollout title events to match the chosen titles, and resets Codex state cache once after making backups under `backups/codex-sessions/`. Use `--name` to set the imported title explicitly when importing one rollout file. Already-present identical sessions are skipped. Duplicate session IDs inside one import input are reported and refused as ambiguous. Existing sessions with the same ID but different rollout content are reported as ID conflicts and are not overwritten; other safe sessions from the same bulk import are still imported. With `--merge`, imports also fast-forward local rollouts when their comparable history is a prefix of the incoming rollout. Equivalent histories and locally ahead histories are skipped; diverged histories are reported and left untouched. Add `--show-divergence` to include a compact preview of the first differing records for each diverged session.
+`import` requires a valid UUID in record-1 `session_meta.payload.id`; filename or later-metadata fallbacks are never used for state-changing imports. It copies new rollouts into `sessions/YYYY/MM/DD/`, adds or updates the matching `session_index.jsonl` entries when needed, updates rollout title events to match the chosen titles, and resets Codex state cache once after making backups under `backups/codex-sessions/`. Use `--name` to set the imported title explicitly when importing one rollout file. Already-present identical sessions are skipped. Duplicate session IDs inside one import input are reported and refused as ambiguous. Existing sessions with the same ID but different rollout content are reported as ID conflicts and are not overwritten; other safe sessions from the same bulk import are still imported. With `--merge`, imports also fast-forward local rollouts when their comparable history is a prefix of the incoming rollout. Equivalent histories and locally ahead histories are skipped; diverged histories are reported and left untouched. Add `--show-divergence` to include a compact preview of the first differing records for each diverged session.
 
 ### Sync sessions
 
@@ -341,7 +346,7 @@ codex-sessions sync ~/Dropbox/codex-sessions
 codex-sessions sync --dry-run ~/Dropbox/codex-sessions
 ```
 
-`sync` imports sessions found in the folder, exports local-only sessions back to that folder, and writes the same transfer manifest used by bulk export. It does not delete sessions from either side. Same-ID sessions already present in the sync folder are compared by rollout history: identical/equivalent sessions are skipped, safely newer folder copies can fast-forward local state, local-ahead sessions stay local, and diverged conflicts are reported without overwriting either side.
+`sync` imports sessions found in the folder, exports local-only sessions back to that folder, and writes the same transfer manifest used by bulk export. It does not delete sessions from either side. Download/import identity is strict. Upload/export preserves damaged filename-ID rollouts unchanged with warnings, continues past no-ID failures, and returns status `1` if any local file could not be backed up. Same-ID sessions already present in the sync folder are compared by rollout history: identical/equivalent sessions are skipped, safely newer folder copies can fast-forward local state, local-ahead sessions stay local, and diverged conflicts are reported without overwriting either side. Degraded rollouts are never assigned a history relation: sync only recognizes byte-identical content already at the same output path, and it refuses to overwrite different valid or damaged content there.
 
 Commands that change Codex sessions try to reset the state cache after writing their rollout or `session_index.jsonl` changes. If the root `state_*.sqlite*` files are locked, the successful session changes stay written. In an interactive terminal the command prompts after the lock failure so you can close Codex and retry. Use `--non-interactive` to avoid that prompt, or `--no-reset-state-cache` to skip the automatic attempt and control refresh from a script:
 
@@ -458,6 +463,14 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
+To make the normal `codex-sessions ...` command use source changes from this checkout immediately,
+install the pipx app from the checkout in editable mode:
+
+```bash
+pipx uninstall codex-sessions
+pipx install --editable .
+```
+
 Run the test suite:
 
 ```bash
@@ -479,3 +492,8 @@ python -m ruff check .
 python -m mypy
 npx --yes pyright
 ```
+
+When changing extracted session identity/metadata semantics or cache entry fields, bump both the
+cache schema version and its versioned filename in `src/codex_sessions/sessions/cache.py` and
+`src/codex_sessions/search/cache.py`. Add or update tests proving stale cache files are ignored
+and rebuilt under the new identity rules.

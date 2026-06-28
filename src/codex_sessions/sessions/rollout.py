@@ -156,6 +156,16 @@ class ExportSessionPlan:
     ended_at: datetime | None
     rollout_will_be_rewritten: bool
     overwrite: bool
+    identity_status: str | None = None
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ExportFailure:
+    source_path: Path
+    message: str
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +180,9 @@ class ExportSessionsPlan:
     output_path: Path | None
     force: bool
     filtered_out_count: int
+    already_present_count: int = 0
+    failures: tuple[ExportFailure, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -12,9 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codex_sessions.cli import main  # noqa: E402
+from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    session_id = session_id_from_path(path)
+    if session_id and (not records or records[0].get("type") != "session_meta"):
+        records = [{"type": "session_meta", "payload": {"id": session_id}}, *records]
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",
@@ -114,10 +118,10 @@ class CliExportBulkTests(unittest.TestCase):
             self.assertEqual(manifest_rollouts[0]["size"], first_output.stat().st_size)
             self.assertEqual(len(manifest_rollouts[0]["sha256"]), 64)
             self.assertEqual(
-                read_jsonl(first_output)[0]["payload"]["thread_name"], "First bulk export"
+                read_jsonl(first_output)[1]["payload"]["thread_name"], "First bulk export"
             )
             self.assertEqual(
-                read_jsonl(second_output)[0]["payload"]["thread_name"], "Second bulk export"
+                read_jsonl(second_output)[1]["payload"]["thread_name"], "Second bulk export"
             )
 
     def test_export_filters_by_updated_time_and_except_selector(self) -> None:
@@ -274,7 +278,7 @@ class CliExportBulkTests(unittest.TestCase):
                 manifest = json.loads(
                     archive.read("codex-sessions-manifest-v1.json").decode("utf-8")
                 )
-            self.assertEqual(exported_records[0]["payload"]["thread_name"], "Zip export title")
+            self.assertEqual(exported_records[1]["payload"]["thread_name"], "Zip export title")
             self.assertEqual(manifest["rollouts"][0]["path"], rollout_member)
             self.assertEqual(manifest["rollouts"][0]["session_id"], session_id)
 

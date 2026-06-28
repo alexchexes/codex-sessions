@@ -19,7 +19,8 @@ from codex_sessions.sessions.files import (
     discover_session_files,
     discover_session_paths,
     format_session_file_path,
-    session_file_metadata,
+    read_session_file_metadata,
+    read_session_identity,
 )
 from codex_sessions.sessions.index import (
     is_session_id,
@@ -37,6 +38,7 @@ LATEST_TARGET = "latest"
 class ConversionInput:
     path: Path
     output_stem: str | None
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -110,11 +112,12 @@ def resolve_session_id(
     codex_home: Path,
     *,
     sessions_dir: Path | None = None,
+    require_canonical: bool = False,
 ) -> Path:
     resolved_sessions_dir = sessions_dir or codex_home / "sessions"
     normalized_id = normalize_session_id(session_id)
     matches = [
-        session_file.path
+        session_file
         for session_file in discover_session_files(resolved_sessions_dir)
         if (
             session_file.session_id
@@ -125,12 +128,19 @@ def resolve_session_id(
         raise CliError(f"No Codex session found for ID: {session_id}")
     if len(matches) > 1:
         rendered_matches = ", ".join(
-            format_session_file_path(path, resolved_sessions_dir) for path in matches
+            format_session_file_path(session_file.path, resolved_sessions_dir)
+            for session_file in matches
         )
         raise CliError(
             f"Multiple Codex session files found for ID {session_id}: {rendered_matches}"
         )
-    return matches[0].resolve()
+    match = matches[0]
+    if require_canonical and not match.session_id_is_canonical:
+        raise CliError(
+            f"Cannot modify rollout with invalid canonical session metadata: {match.path}: "
+            f"{match.identity_warning}"
+        )
+    return match.path.resolve()
 
 
 def resolve_latest_session(codex_home: Path, *, sessions_dir: Path | None = None) -> Path:
@@ -190,8 +200,8 @@ def latest_session_sort_result(
         if metadata is not None and metadata.sha256 is not None
         else None
     )
-    session_id, started_at, ended_at = session_file_metadata(path, include_ended_at=True)
-    timestamp = ended_at or started_at
+    file_metadata = read_session_file_metadata(path, include_ended_at=True)
+    timestamp = file_metadata.ended_at or file_metadata.started_at
     updated_stat_result = path.stat()
     cache_entry = None
     if (
@@ -202,15 +212,25 @@ def latest_session_sort_result(
         cache_entry = session_cache_entry(
             path,
             updated_stat_result,
-            session_id=session_id,
-            started_at=started_at,
-            ended_at=ended_at,
+            session_id=file_metadata.identity.session_id,
+            started_at=file_metadata.started_at,
+            ended_at=file_metadata.ended_at,
             timestamps_scanned=True,
+            session_id_is_canonical=file_metadata.identity.is_canonical,
+            identity_warning=file_metadata.identity.warning,
+            identity_status=file_metadata.identity.status,
             fingerprint=fingerprint,
         )
     if timestamp is not None:
         return LatestSessionSortResult((1, timestamp.timestamp()), cache_key, cache_entry)
     return LatestSessionSortResult((0, updated_stat_result.st_mtime), cache_key, cache_entry)
+
+
+def conversion_input(path: Path, output_stem: str | None) -> ConversionInput:
+    resolved_path = path.resolve()
+    identity = read_session_identity(resolved_path)
+    warnings = (f"{resolved_path}: {identity.warning}",) if identity.warning is not None else ()
+    return ConversionInput(path=resolved_path, output_stem=output_stem, warnings=warnings)
 
 
 def looks_like_missing_file_path(raw_input: Path) -> bool:
@@ -236,9 +256,9 @@ def resolve_session_title(
     session_id = session_index_record_id(record)
     if session_id is None:
         raise CliError(f"session_index.jsonl entry for title {title!r} has no ID.")
-    return ConversionInput(
-        path=resolve_session_id(session_id, codex_home, sessions_dir=sessions_dir),
-        output_stem=normalize_session_id(session_id),
+    return conversion_input(
+        resolve_session_id(session_id, codex_home, sessions_dir=sessions_dir),
+        normalize_session_id(session_id),
     )
 
 
@@ -252,25 +272,25 @@ def resolve_conversion_input(
     input_text = str(raw_input)
     if input_text.lower() == LATEST_TARGET:
         latest_path = resolve_latest_session(codex_home, sessions_dir=sessions_dir)
-        return ConversionInput(path=latest_path, output_stem=None)
+        return conversion_input(latest_path, None)
 
     if is_session_id(input_text):
-        return ConversionInput(
-            path=resolve_session_id(input_text, codex_home, sessions_dir=sessions_dir),
-            output_stem=normalize_session_id(input_text),
+        return conversion_input(
+            resolve_session_id(input_text, codex_home, sessions_dir=sessions_dir),
+            normalize_session_id(input_text),
         )
 
     expanded_input = raw_input.expanduser()
     if expanded_input.exists():
         if not expanded_input.is_file():
             raise CliError(f"Input path is not a file: {raw_input}")
-        return ConversionInput(path=expanded_input.resolve(), output_stem=None)
+        return conversion_input(expanded_input, None)
 
     codex_home_input = codex_home / raw_input
     if not raw_input.is_absolute() and codex_home_input.exists():
         if not codex_home_input.is_file():
             raise CliError(f"Input path is not a file: {raw_input}")
-        return ConversionInput(path=codex_home_input.resolve(), output_stem=None)
+        return conversion_input(codex_home_input, None)
 
     sessions_dir_input = (
         (sessions_dir / raw_input) if sessions_dir and not raw_input.is_absolute() else None
@@ -278,7 +298,7 @@ def resolve_conversion_input(
     if sessions_dir_input is not None and sessions_dir_input.exists():
         if not sessions_dir_input.is_file():
             raise CliError(f"Input path is not a file: {raw_input}")
-        return ConversionInput(path=sessions_dir_input.resolve(), output_stem=None)
+        return conversion_input(sessions_dir_input, None)
 
     try:
         return resolve_session_title(

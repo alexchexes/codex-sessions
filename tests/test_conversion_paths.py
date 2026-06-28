@@ -15,6 +15,7 @@ from codex_sessions.sessions.cache import (
     session_cache_path,
     write_session_cache,
 )
+from codex_sessions.sessions.files import SessionFileMetadata, SessionIdentity
 from codex_sessions.sessions.paths import (
     default_output_path,
     infer_output_format,
@@ -151,7 +152,7 @@ class ConversionPathsTests(unittest.TestCase):
             )
 
             with patch(
-                "codex_sessions.sessions.paths.session_file_metadata",
+                "codex_sessions.sessions.paths.read_session_file_metadata",
                 side_effect=AssertionError("cached metadata should be reused"),
             ):
                 resolved = resolve_conversion_input(Path("latest"), codex_home)
@@ -291,9 +292,7 @@ class ConversionPathsTests(unittest.TestCase):
                 ],
             )
 
-            def mutate_rollout(
-                _path: Path, *, include_ended_at: bool
-            ) -> tuple[str, datetime, datetime]:
+            def mutate_rollout(_path: Path, *, include_ended_at: bool) -> SessionFileMetadata:
                 self.assertTrue(include_ended_at)
                 with rollout.open("a", encoding="utf-8") as file:
                     file.write(
@@ -307,10 +306,14 @@ class ConversionPathsTests(unittest.TestCase):
                         + "\n"
                     )
                 timestamp = utc_datetime(2026, 5, 28, 12, 0)
-                return "live", timestamp, timestamp
+                return SessionFileMetadata(
+                    identity=SessionIdentity(session_id="live", is_canonical=False),
+                    started_at=timestamp,
+                    ended_at=timestamp,
+                )
 
             with patch(
-                "codex_sessions.sessions.paths.session_file_metadata",
+                "codex_sessions.sessions.paths.read_session_file_metadata",
                 side_effect=mutate_rollout,
             ):
                 resolved = resolve_conversion_input(Path("latest"), codex_home)

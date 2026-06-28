@@ -52,7 +52,6 @@ from codex_sessions.sessions.files import (
     SessionFile,
     discover_session_paths,
     format_session_file_path,
-    session_id_from_path,
 )
 from codex_sessions.sessions.index import normalize_session_id, read_session_index
 from codex_sessions.sessions.message_content import content_to_text, searchable_user_message_text
@@ -137,7 +136,6 @@ def build_search_document(input_path: Path, redaction: str) -> SearchDocument:
     return build_session_document(
         input_path,
         redaction,
-        session_id_from_path=session_id_from_path,
         render_line_groups=render_line_groups_with_tool_context,
     )
 
@@ -365,6 +363,9 @@ def load_search_documents(
                         session_path, stat_result, document
                     )
                     metadata_cache_dirty = True
+            if document.identity_warning is not None:
+                relative_path = format_session_file_path(session_path, sessions_dir)
+                warnings.append(f"{relative_path}: {document.identity_warning}")
             documents.append((session_path, document))
         except (OSError, ValueError) as exc:
             relative_path = format_session_file_path(session_path, sessions_dir)
@@ -445,6 +446,9 @@ def search_sessions(
             session_id=document.session_id,
             started_at=document.started_at,
             ended_at=document.ended_at,
+            session_id_is_canonical=document.session_id_is_canonical,
+            identity_warning=document.identity_warning,
+            identity_status=document.identity_status,
         )
         inferred_title = infer_search_document_title(document)
         session = session_display_info_for_search(session_file, entries_by_id, inferred_title)

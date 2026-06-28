@@ -18,10 +18,14 @@ from codex_sessions.sessions.cache import (  # noqa: E402
     session_cache_path,
     write_session_cache,
 )
+from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
 from codex_sessions.sessions.rollout import FileFingerprint  # noqa: E402
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    session_id = session_id_from_path(path)
+    if session_id and (not records or records[0].get("type") != "session_meta"):
+        records = [{"type": "session_meta", "payload": {"id": session_id}}, *records]
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",

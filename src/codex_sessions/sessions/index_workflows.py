@@ -148,6 +148,9 @@ def list_session_display_infos_with_warnings(
                 session_id=document.session_id,
                 started_at=document.started_at,
                 ended_at=document.ended_at,
+                session_id_is_canonical=document.session_id_is_canonical,
+                identity_warning=document.identity_warning,
+                identity_status=document.identity_status,
             ),
             infer_search_document_title(document),
         )
@@ -204,7 +207,7 @@ def missing_session_index_candidates(
     candidates = []
     skipped_without_id = 0
     for session_path, document in documents:
-        if not document.session_id:
+        if not document.session_id or not document.session_id_is_canonical:
             skipped_without_id += 1
             continue
         if normalize_session_id(document.session_id) in indexed_ids:
@@ -223,7 +226,7 @@ def missing_session_index_candidates(
 
 def optional_session_file_for_id(session_id: str, codex_home: Path) -> Path | None:
     try:
-        return resolve_session_id(session_id, codex_home)
+        return resolve_session_id(session_id, codex_home, require_canonical=True)
     except CliError as exc:
         if str(exc).startswith("No Codex session found for ID:"):
             return None

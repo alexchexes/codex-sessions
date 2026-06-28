@@ -99,6 +99,13 @@ index repairs with:
 codex-sessions repair-index --dry-run
 ```
 
+Treat `FILENAME ID MISMATCH`, `INVALID RECORD-1 session_meta; USING ID FROM
+FILENAME`, and `INVALID RECORD-1 session_meta; NO SESSION ID` as rollout-integrity
+warnings. The first record's valid `session_meta.payload.id` is authoritative;
+later `session_meta` records may be copied fork history. `repair-index` skips
+rollouts without a canonical record-1 ID, so do not present it as a repair for
+those warnings.
+
 Run `codex-sessions repair-index` only when the user wants to modify Codex
 state. It backs up `session_index.jsonl` and renames root `state_*.sqlite*`
 files so Codex rebuilds its state cache.

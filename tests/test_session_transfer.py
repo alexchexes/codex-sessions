@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -6,6 +7,7 @@ from pathlib import Path
 from codex_sessions.sessions.documents import SearchDocument
 from codex_sessions.sessions.rollout import FileFingerprint, ImportSessionPlan
 from codex_sessions.sessions.transfer import (
+    build_transfer_document,
     default_export_filename,
     existing_index_record_for_id,
     import_target_path,
@@ -30,6 +32,57 @@ def search_document() -> SearchDocument:
 
 
 class SessionTransferTests(unittest.TestCase):
+    def test_transfer_document_uses_record_one_id_when_title_contains_another_uuid(self) -> None:
+        title_id = "11111111-2222-3333-4444-555555555555"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_path = Path(tmpdir) / f"2026-04-30--from-{title_id}--{SESSION_ID}.jsonl"
+            write_jsonl(
+                source_path,
+                [{"type": "session_meta", "payload": {"id": SESSION_ID}}],
+            )
+
+            document = build_transfer_document(source_path)
+
+        self.assertEqual(document.session_id, SESSION_ID)
+        self.assertTrue(document.session_id_is_canonical)
+        self.assertIsNone(document.identity_warning)
+
+    def test_transfer_document_ignores_parent_session_meta_in_fork_history(self) -> None:
+        parent_id = "11111111-2222-3333-4444-555555555555"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_path = Path(tmpdir) / f"rollout-2026-04-30T18-20-39-{SESSION_ID}.jsonl"
+            write_jsonl(
+                source_path,
+                [
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": SESSION_ID, "forked_from_id": parent_id},
+                    },
+                    {"type": "session_meta", "payload": {"id": parent_id}},
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "thread_name_updated",
+                            "thread_id": parent_id,
+                            "thread_name": "Parent title",
+                        },
+                    },
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "thread_name_updated",
+                            "thread_id": SESSION_ID,
+                            "thread_name": "Fork title",
+                        },
+                    },
+                ],
+            )
+
+            document = build_transfer_document(source_path)
+
+        self.assertEqual(document.session_id, SESSION_ID)
+        self.assertEqual(document.thread_name, "Fork title")
+
     def test_import_target_path_preserves_codex_rollout_name_and_date(self) -> None:
         source_path = Path(f"rollout-2026-04-30T18-20-39-{SESSION_ID}.jsonl")
 
@@ -44,6 +97,15 @@ class SessionTransferTests(unittest.TestCase):
 
         self.assertEqual(target_path.parent, Path("sessions/2026/04/30"))
         self.assertTrue(target_path.name.startswith("rollout-"))
+        self.assertTrue(target_path.name.endswith(f"-{SESSION_ID}.jsonl"))
+
+    def test_import_target_path_replaces_mismatched_rollout_filename_id(self) -> None:
+        wrong_id = "11111111-2222-3333-4444-555555555555"
+        source_path = Path(f"rollout-2026-04-30T18-20-39-{wrong_id}.jsonl")
+
+        target_path = import_target_path(source_path, Path("sessions"), search_document())
+
+        self.assertNotEqual(target_path.name, source_path.name)
         self.assertTrue(target_path.name.endswith(f"-{SESSION_ID}.jsonl"))
 
     def test_existing_index_record_for_id_matches_case_insensitively(self) -> None:
@@ -122,6 +184,13 @@ class SessionTransferTests(unittest.TestCase):
             ),
             f"2026-04-30--Title-with-chars--{SESSION_ID}.jsonl",
         )
+
+
+def write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
+    path.write_text(
+        "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

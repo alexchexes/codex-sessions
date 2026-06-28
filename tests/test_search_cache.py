@@ -21,7 +21,7 @@ class SearchCacheTests(unittest.TestCase):
     def test_search_cache_path_uses_codex_cache_directory(self) -> None:
         self.assertEqual(
             search_cache_path(Path("/tmp/codex")).as_posix(),
-            "/tmp/codex/cache/codex-sessions/search-v4.json",
+            "/tmp/codex/cache/codex-sessions/search-v5.json",
         )
 
     def test_read_search_cache_returns_entries_for_current_version(self) -> None:
@@ -42,7 +42,15 @@ class SearchCacheTests(unittest.TestCase):
     def test_read_search_cache_ignores_invalid_or_stale_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_path = Path(tmpdir) / "search.json"
-            cache_path.write_text('{"version":1,"entries":{"stale":{}}}', encoding="utf-8")
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": SEARCH_CACHE_VERSION - 1,
+                        "entries": {"stale": {}},
+                    }
+                ),
+                encoding="utf-8",
+            )
             self.assertEqual(read_search_cache(cache_path), {})
 
             cache_path.write_text("not json", encoding="utf-8")
@@ -73,6 +81,9 @@ class SearchCacheTests(unittest.TestCase):
                 metadata_lines=("Session metadata: cwd: repo",),
                 tool_input_lines=("Tool call: shell_command",),
                 tool_output_lines=("Tool output: shell_command: done",),
+                session_id_is_canonical=False,
+                identity_warning="record 1 metadata is invalid",
+                identity_status="INVALID RECORD-1 session_meta; USING ID FROM FILENAME",
             )
 
             entry = search_cache_entry(rollout_path, stat_result, document, "...")
