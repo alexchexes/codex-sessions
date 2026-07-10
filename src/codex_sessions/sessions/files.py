@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +37,7 @@ class SessionFile:
     session_id_is_canonical: bool = False
     identity_warning: str | None = None
     identity_status: str | None = None
+    modified_at: datetime | None = None
 
 
 def session_id_from_path(path: Path) -> str | None:
@@ -163,6 +164,10 @@ def format_session_file_path(path: Path, sessions_dir: Path) -> str:
     return relative_path.as_posix()
 
 
+def file_modified_at(path: Path) -> datetime:
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+
+
 def discover_session_files(
     sessions_dir: Path, *, include_ended_at: bool = False
 ) -> list[SessionFile]:
@@ -183,6 +188,7 @@ def discover_session_files(
                 session_id_is_canonical=metadata.identity.is_canonical,
                 identity_warning=metadata.identity.warning,
                 identity_status=metadata.identity.status,
+                modified_at=file_modified_at(path),
             )
         )
     return session_files

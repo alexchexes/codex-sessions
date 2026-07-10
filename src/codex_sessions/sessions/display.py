@@ -100,13 +100,14 @@ def indexed_session_display_info(
         return SessionDisplayInfo(
             session_id=entry.session_id,
             title=entry.thread_name,
+            ended_at=entry.updated_at,
             status=NO_ROLLOUT_FILE,
         )
     return SessionDisplayInfo(
         session_id=entry.session_id,
         title=entry.thread_name,
         started_at=session_file.started_at,
-        ended_at=session_file.ended_at,
+        ended_at=session_file.ended_at or entry.updated_at or session_file.modified_at,
         relative_path=session_file.relative_path,
         identity_status=session_file.identity_status,
     )
@@ -120,6 +121,8 @@ def unindexed_session_display_info(
         return SessionDisplayInfo(
             session_id=None,
             title=None,
+            started_at=session_file.started_at,
+            ended_at=session_file.ended_at or session_file.modified_at,
             relative_path=session_file.relative_path,
             status=NO_SESSION_INDEX_ENTRY,
             identity_status=session_file.identity_status,
@@ -128,7 +131,7 @@ def unindexed_session_display_info(
         session_id=session_file.session_id,
         title=inferred_title,
         started_at=session_file.started_at,
-        ended_at=session_file.ended_at,
+        ended_at=session_file.ended_at or session_file.modified_at,
         relative_path=session_file.relative_path,
         status=NO_SESSION_INDEX_ENTRY,
         identity_status=session_file.identity_status,

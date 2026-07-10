@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -18,7 +19,7 @@ from codex_sessions.sessions.display import (  # noqa: E402
     format_local_timestamp,
     local_timezone_offset_label,
 )
-from codex_sessions.sessions.files import session_id_from_path  # noqa: E402
+from codex_sessions.sessions.files import file_modified_at, session_id_from_path  # noqa: E402
 from codex_sessions.sessions.index_workflows import list_session_lines  # noqa: E402
 
 
@@ -93,7 +94,9 @@ class CliListTests(unittest.TestCase):
                 "INVALID RECORD-1 session_meta; USING ID FROM FILENAME",
                 stdout.getvalue(),
             )
-            self.assertIn(str(rollout_path.relative_to(codex_home / "sessions")), stderr.getvalue())
+            self.assertIn(
+                rollout_path.relative_to(codex_home / "sessions").as_posix(), stderr.getvalue()
+            )
             self.assertIn("using trailing filename session ID", stderr.getvalue())
 
     def test_list_marks_filename_metadata_id_mismatch_on_affected_row(self) -> None:
@@ -141,7 +144,11 @@ class CliListTests(unittest.TestCase):
                         "thread_name": "Add scope for type casting types",
                         "updated_at": "2026-03-06T13:24:38.0294272Z",
                     },
-                    {"id": missing_file_id, "thread_name": "Missing rollout"},
+                    {
+                        "id": missing_file_id,
+                        "thread_name": "Missing rollout",
+                        "updated_at": "2026-02-23T13:50:54.380Z",
+                    },
                 ],
             )
             matched_path = sessions_day / f"rollout-2026-04-30T18-20-39-{matched_id}.jsonl"
@@ -166,6 +173,8 @@ class CliListTests(unittest.TestCase):
             lines = list_session_lines(codex_home)
             started_at = parse_timestamp("2026-02-22T13:48:23.714Z")
             ended_at = parse_timestamp("2026-02-22T13:50:54.380Z")
+            missing_updated_at = parse_timestamp("2026-02-23T13:50:54.380Z")
+            orphan_modified_at = file_modified_at(orphan_path)
 
             self.assertEqual(
                 lines,
@@ -177,13 +186,164 @@ class CliListTests(unittest.TestCase):
                         f"{matched_id} - "
                         "Add scope for type casting types"
                     ),
-                    f"{missing_file_id} - Missing rollout - NO ROLLOUT FILE",
                     (
+                        f"{format_local_timestamp(missing_updated_at)} "
+                        f"({local_timezone_offset_label(missing_updated_at)}) - "
+                        f"{missing_file_id} - Missing rollout - NO ROLLOUT FILE"
+                    ),
+                    (
+                        f"{format_local_timestamp(orphan_modified_at)} "
+                        f"({local_timezone_offset_label(orphan_modified_at)}) - "
                         f"2026/04/30/{orphan_path.name} - NO ENTRY IN session_index.jsonl - "
                         "INVALID RECORD-1 session_meta; USING ID FROM FILENAME"
                     ),
                 ],
             )
+
+    def test_list_sorts_by_activity_then_index_then_mtime_with_unknown_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "01" / "01"
+            sessions_day.mkdir(parents=True)
+
+            unknown_id = "11111111-1111-1111-1111-111111111111"
+            activity_id = "22222222-2222-2222-2222-222222222222"
+            index_only_id = "33333333-3333-3333-3333-333333333333"
+            index_fallback_id = "44444444-4444-4444-4444-444444444444"
+            mtime_fallback_id = "55555555-5555-5555-5555-555555555555"
+            newest_activity_id = "66666666-6666-6666-6666-666666666666"
+            ids = [
+                unknown_id,
+                activity_id,
+                index_only_id,
+                index_fallback_id,
+                mtime_fallback_id,
+                newest_activity_id,
+            ]
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [
+                    {
+                        "id": newest_activity_id,
+                        "thread_name": "Newest activity",
+                        "updated_at": "2026-07-02T00:00:00Z",
+                    },
+                    {"id": unknown_id, "thread_name": "Unknown"},
+                    {"id": mtime_fallback_id, "thread_name": "Mtime fallback"},
+                    {
+                        "id": activity_id,
+                        "thread_name": "Activity wins",
+                        "updated_at": "2026-07-01T00:00:00Z",
+                    },
+                    {
+                        "id": index_fallback_id,
+                        "thread_name": "Index fallback",
+                        "updated_at": "2026-04-01T00:00:00Z",
+                    },
+                    {
+                        "id": index_only_id,
+                        "thread_name": "Index only",
+                        "updated_at": "2026-03-01T00:00:00Z",
+                    },
+                ],
+            )
+
+            activity_path = sessions_day / f"rollout-{activity_id}.jsonl"
+            write_jsonl(
+                activity_path,
+                [
+                    {
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": activity_id},
+                    },
+                    {
+                        "timestamp": "2026-02-01T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {"type": "reasoning"},
+                    },
+                    import_title_record(
+                        activity_id, "Administrative rename", "2026-08-01T00:00:00Z"
+                    ),
+                    {
+                        "timestamp": "2026-08-02T00:00:00Z",
+                        "type": "world_state",
+                        "payload": {},
+                    },
+                ],
+            )
+
+            index_fallback_path = sessions_day / f"rollout-{index_fallback_id}.jsonl"
+            write_jsonl(
+                index_fallback_path,
+                [
+                    {
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": index_fallback_id},
+                    },
+                    import_title_record(
+                        index_fallback_id, "Administrative rename", "2026-08-03T00:00:00Z"
+                    ),
+                ],
+            )
+
+            mtime_fallback_path = sessions_day / f"rollout-{mtime_fallback_id}.jsonl"
+            write_jsonl(
+                mtime_fallback_path,
+                [
+                    {
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": mtime_fallback_id},
+                    }
+                ],
+            )
+            mtime_timestamp = parse_timestamp("2026-05-01T00:00:00Z")
+            assert mtime_timestamp is not None
+            os.utime(
+                mtime_fallback_path, (mtime_timestamp.timestamp(), mtime_timestamp.timestamp())
+            )
+
+            newest_activity_path = sessions_day / f"rollout-{newest_activity_id}.jsonl"
+            write_jsonl(
+                newest_activity_path,
+                [
+                    {
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": newest_activity_id},
+                    },
+                    {
+                        "timestamp": "2026-06-01T00:00:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "token_count"},
+                    },
+                ],
+            )
+
+            lines = list_session_lines(codex_home, use_cache=False)
+
+            self.assertEqual(
+                [next(session_id for session_id in ids if session_id in line) for line in lines],
+                ids,
+            )
+            expected_times = [
+                None,
+                "2026-02-01",
+                "2026-03-01",
+                "2026-04-01",
+                "2026-05-01",
+                "2026-06-01",
+            ]
+            for line, expected_time in zip(lines, expected_times, strict=True):
+                with self.subTest(line=line):
+                    if expected_time is None:
+                        self.assertFalse(line.startswith("2026-"))
+                    else:
+                        self.assertIn(expected_time, line)
+            self.assertNotIn("2026-07", lines[1])
+            self.assertNotIn("2026-08", lines[1])
 
     def test_list_sessions_infers_title_for_unindexed_rollout(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

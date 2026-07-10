@@ -21,7 +21,7 @@ class SearchCacheTests(unittest.TestCase):
     def test_search_cache_path_uses_codex_cache_directory(self) -> None:
         self.assertEqual(
             search_cache_path(Path("/tmp/codex")).as_posix(),
-            "/tmp/codex/cache/codex-sessions/search-v5.json",
+            "/tmp/codex/cache/codex-sessions/search-v6.json",
         )
 
     def test_read_search_cache_returns_entries_for_current_version(self) -> None:
@@ -77,6 +77,7 @@ class SearchCacheTests(unittest.TestCase):
                 thread_name="Cached title",
                 started_at=datetime(2026, 4, 30, 18, 20, 39, tzinfo=timezone.utc),
                 ended_at=datetime(2026, 4, 30, 18, 21, 39, tzinfo=timezone.utc),
+                last_activity_at=datetime(2026, 4, 30, 18, 21, 30, tzinfo=timezone.utc),
                 visible_lines=("Codex: cached line",),
                 metadata_lines=("Session metadata: cwd: repo",),
                 tool_input_lines=("Tool call: shell_command",),

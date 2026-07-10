@@ -24,6 +24,7 @@ def search_document() -> SearchDocument:
         thread_name="Rollout title",
         started_at=datetime(2026, 4, 30, 18, 20, 39, tzinfo=timezone.utc),
         ended_at=datetime(2026, 4, 30, 19, 0, 0, tzinfo=timezone.utc),
+        last_activity_at=datetime(2026, 4, 30, 19, 0, 0, tzinfo=timezone.utc),
         visible_lines=("User: please transfer this session",),
         metadata_lines=(),
         tool_input_lines=(),

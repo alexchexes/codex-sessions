@@ -76,6 +76,7 @@ class SessionSearchTests(unittest.TestCase):
             thread_name=None,
             started_at=None,
             ended_at=None,
+            last_activity_at=None,
             visible_lines=("User: needle", "User: needle"),
             metadata_lines=("Session metadata: cwd: needle",),
             tool_input_lines=("Tool call: shell_command: input needle",),

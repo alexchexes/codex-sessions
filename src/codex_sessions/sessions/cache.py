@@ -9,8 +9,8 @@ from codex_sessions.core.timestamps import parse_timestamp
 from codex_sessions.sessions.documents import SearchDocument
 from codex_sessions.sessions.rollout import FileFingerprint, file_fingerprint
 
-SESSION_CACHE_VERSION = 2
-SESSION_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "sessions-v2.json"
+SESSION_CACHE_VERSION = 3
+SESSION_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "sessions-v3.json"
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,7 @@ class SessionCacheEntry:
     thread_name: str | None
     started_at: datetime | None
     ended_at: datetime | None
+    last_activity_at: datetime | None
     timestamps_scanned: bool
     session_id_is_canonical: bool
     identity_warning: str | None
@@ -114,6 +115,7 @@ def cached_session_metadata(
         thread_name=thread_name,
         started_at=parse_timestamp(entry.get("started_at")),
         ended_at=parse_timestamp(entry.get("ended_at")),
+        last_activity_at=parse_timestamp(entry.get("last_activity_at")),
         timestamps_scanned=timestamps_scanned,
         session_id_is_canonical=session_id_is_canonical,
         identity_warning=identity_warning,
@@ -137,6 +139,7 @@ def session_cache_entry(
     thread_name: str | None = None,
     started_at: datetime | None = None,
     ended_at: datetime | None = None,
+    last_activity_at: datetime | None = None,
     timestamps_scanned: bool = False,
     session_id_is_canonical: bool = False,
     identity_warning: str | None = None,
@@ -152,6 +155,7 @@ def session_cache_entry(
         "thread_name": thread_name,
         "started_at": started_at.isoformat() if started_at else None,
         "ended_at": ended_at.isoformat() if ended_at else None,
+        "last_activity_at": last_activity_at.isoformat() if last_activity_at else None,
         "timestamps_scanned": timestamps_scanned,
         "session_id_is_canonical": session_id_is_canonical,
         "identity_warning": identity_warning,
@@ -173,6 +177,7 @@ def session_cache_entry_from_document(
         thread_name=document.thread_name,
         started_at=document.started_at,
         ended_at=document.ended_at,
+        last_activity_at=document.last_activity_at,
         timestamps_scanned=True,
         session_id_is_canonical=document.session_id_is_canonical,
         identity_warning=document.identity_warning,
@@ -217,6 +222,7 @@ def file_fingerprint_from_session_cache(
             thread_name=metadata.thread_name if metadata is not None else None,
             started_at=metadata.started_at if metadata is not None else None,
             ended_at=metadata.ended_at if metadata is not None else None,
+            last_activity_at=metadata.last_activity_at if metadata is not None else None,
             timestamps_scanned=metadata.timestamps_scanned if metadata is not None else False,
             session_id_is_canonical=(
                 metadata.session_id_is_canonical if metadata is not None else False

@@ -37,6 +37,7 @@ from codex_sessions.sessions.documents import (
     SearchDocument,
     infer_title_from_message,
     inferred_thread_name,
+    is_session_activity_record,
 )
 from codex_sessions.sessions.files import (
     SessionFile,
@@ -240,6 +241,7 @@ def build_transfer_document(input_path: Path) -> SearchDocument:
     thread_name: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
+    last_activity_at: datetime | None = None
     first_user_line: str | None = None
     first_codex_line: str | None = None
 
@@ -250,6 +252,8 @@ def build_transfer_document(input_path: Path) -> SearchDocument:
         record_timestamp = parse_timestamp(raw_record.get("timestamp"))
         if record_timestamp is not None:
             ended_at = record_timestamp
+            if is_session_activity_record(raw_record):
+                last_activity_at = record_timestamp
 
         payload = raw_record.get("payload")
         if started_at is None:
@@ -288,6 +292,7 @@ def build_transfer_document(input_path: Path) -> SearchDocument:
         thread_name=thread_name,
         started_at=started_at,
         ended_at=ended_at,
+        last_activity_at=last_activity_at,
         visible_lines=tuple(
             line for line in (first_user_line, first_codex_line) if line is not None
         ),

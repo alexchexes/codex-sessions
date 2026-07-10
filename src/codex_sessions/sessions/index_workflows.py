@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ from codex_sessions.sessions.documents import (
 )
 from codex_sessions.sessions.files import (
     SessionFile,
+    file_modified_at,
     format_session_file_path,
 )
 from codex_sessions.sessions.index import (
@@ -147,10 +148,11 @@ def list_session_display_infos_with_warnings(
                 relative_path=format_session_file_path(session_path, resolved_sessions_dir),
                 session_id=document.session_id,
                 started_at=document.started_at,
-                ended_at=document.ended_at,
+                ended_at=document.last_activity_at,
                 session_id_is_canonical=document.session_id_is_canonical,
                 identity_warning=document.identity_warning,
                 identity_status=document.identity_status,
+                modified_at=file_modified_at(session_path),
             ),
             infer_search_document_title(document),
         )
@@ -162,7 +164,7 @@ def list_session_display_infos_with_warnings(
             normalized_id = normalize_session_id(session_file.session_id)
             session_files_by_id.setdefault(normalized_id, []).append(session_file)
 
-    # Keep index order first, then append rollout-only files so cross-check warnings are stable.
+    # Build index rows before rollout-only rows so equal timestamps retain stable cross-check order.
     indexed_ids = {normalize_session_id(entry.session_id) for entry in index_entries}
     infos = []
     for entry in index_entries:
@@ -178,6 +180,8 @@ def list_session_display_infos_with_warnings(
             continue
         infos.append(unindexed_session_display_info(session_file, inferred_title))
 
+    earliest = datetime.min.replace(tzinfo=timezone.utc)
+    infos.sort(key=lambda info: (info.ended_at is not None, info.ended_at or earliest))
     return infos, warnings
 
 

@@ -11,6 +11,7 @@ from codex_sessions.sessions.documents import (
     infer_search_document_title,
     infer_title_from_message,
     inferred_thread_name,
+    is_session_activity_record,
     sanitize,
 )
 
@@ -22,6 +23,7 @@ class SessionDocumentTests(unittest.TestCase):
             thread_name="Stored rollout title",
             started_at=None,
             ended_at=None,
+            last_activity_at=None,
             visible_lines=("User: User message title",),
             metadata_lines=(),
             tool_input_lines=(),
@@ -36,6 +38,7 @@ class SessionDocumentTests(unittest.TestCase):
             thread_name=None,
             started_at=datetime(2026, 4, 30, tzinfo=timezone.utc),
             ended_at=None,
+            last_activity_at=None,
             visible_lines=(
                 "Codex: Earlier assistant line",
                 "User: Please investigate the import/export behavior.",
@@ -56,6 +59,7 @@ class SessionDocumentTests(unittest.TestCase):
             thread_name=None,
             started_at=None,
             ended_at=None,
+            last_activity_at=None,
             visible_lines=(),
             metadata_lines=(),
             tool_input_lines=(),
@@ -82,6 +86,28 @@ class SessionDocumentTests(unittest.TestCase):
             ),
             {"payload": [{"encrypted_content": "..."}, {"visible": "kept"}]},
         )
+
+    def test_session_activity_excludes_only_administrative_records(self) -> None:
+        excluded = [
+            {"type": "session_meta", "payload": {}},
+            {"type": "world_state", "payload": {}},
+            {"type": "event_msg", "payload": {"type": "thread_name_updated"}},
+        ]
+        included = [
+            {"type": "turn_context", "payload": {}},
+            {"type": "compacted", "payload": {}},
+            {"type": "response_item", "payload": {"type": "reasoning"}},
+            {"type": "event_msg", "payload": {"type": "token_count"}},
+            {"type": "event_msg", "payload": {"type": "turn_aborted"}},
+            {"type": "future_rollout_record", "payload": {}},
+        ]
+
+        for record in excluded:
+            with self.subTest(record=record):
+                self.assertFalse(is_session_activity_record(record))
+        for record in included:
+            with self.subTest(record=record):
+                self.assertTrue(is_session_activity_record(record))
 
     def test_build_search_document_extracts_metadata_and_renders_sanitized_lines(self) -> None:
         session_id = "11111111-1111-1111-1111-111111111111"
@@ -150,6 +176,10 @@ class SessionDocumentTests(unittest.TestCase):
             document.started_at, datetime(2026, 4, 30, 18, 20, 39, tzinfo=timezone.utc)
         )
         self.assertEqual(document.ended_at, datetime(2026, 4, 30, 18, 20, 43, tzinfo=timezone.utc))
+        self.assertEqual(
+            document.last_activity_at,
+            datetime(2026, 4, 30, 18, 20, 43, tzinfo=timezone.utc),
+        )
         self.assertEqual(document.visible_lines, ("User: ...",))
         self.assertEqual(document.metadata_lines, ("Session metadata: present",))
         self.assertEqual(document.tool_input_lines, ("Tool call: shell_command",))

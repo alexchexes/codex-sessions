@@ -51,6 +51,7 @@ from codex_sessions.sessions.documents import (
 from codex_sessions.sessions.files import (
     SessionFile,
     discover_session_paths,
+    file_modified_at,
     format_session_file_path,
 )
 from codex_sessions.sessions.index import normalize_session_id, read_session_index
@@ -445,10 +446,11 @@ def search_sessions(
             relative_path=format_session_file_path(session_path, resolved_sessions_dir),
             session_id=document.session_id,
             started_at=document.started_at,
-            ended_at=document.ended_at,
+            ended_at=document.last_activity_at,
             session_id_is_canonical=document.session_id_is_canonical,
             identity_warning=document.identity_warning,
             identity_status=document.identity_status,
+            modified_at=file_modified_at(session_path),
         )
         inferred_title = infer_search_document_title(document)
         session = session_display_info_for_search(session_file, entries_by_id, inferred_title)

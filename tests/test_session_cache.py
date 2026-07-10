@@ -25,7 +25,7 @@ class SessionCacheTests(unittest.TestCase):
     def test_session_cache_path_uses_codex_cache_directory(self) -> None:
         self.assertEqual(
             session_cache_path(Path("/tmp/codex")).as_posix(),
-            "/tmp/codex/cache/codex-sessions/sessions-v2.json",
+            "/tmp/codex/cache/codex-sessions/sessions-v3.json",
         )
 
     def test_read_session_cache_returns_entries_for_current_version(self) -> None:
@@ -82,6 +82,7 @@ class SessionCacheTests(unittest.TestCase):
                 thread_name="Cached title",
                 started_at=datetime(2026, 4, 30, 18, 20, 39, tzinfo=timezone.utc),
                 ended_at=datetime(2026, 4, 30, 18, 21, 39, tzinfo=timezone.utc),
+                last_activity_at=datetime(2026, 4, 30, 18, 21, 30, tzinfo=timezone.utc),
                 visible_lines=(),
                 metadata_lines=(),
                 tool_input_lines=(),
@@ -99,6 +100,7 @@ class SessionCacheTests(unittest.TestCase):
             self.assertEqual(cached_entry.session_id, document.session_id)
             self.assertEqual(cached_entry.thread_name, document.thread_name)
             self.assertEqual(cached_entry.started_at, document.started_at)
+            self.assertEqual(cached_entry.last_activity_at, document.last_activity_at)
             self.assertTrue(cached_entry.timestamps_scanned)
             self.assertTrue(cached_entry.session_id_is_canonical)
             self.assertEqual(cached_file_fingerprint(entry, rollout_path, stat_result), fingerprint)

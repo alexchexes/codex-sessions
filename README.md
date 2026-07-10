@@ -234,23 +234,14 @@ List Codex sessions from `CODEX_HOME` or `~/.codex` and cross-check `session_ind
 
 ```bash
 codex-sessions list
-```
 
-Example output:
-
-```text
-2026-02-22 13:48 - 2026-02-22 13:50 (UTC+00:00) - 019c8599-6845-7772-9c64-5f0ee47c73f1 - Add scope for type casting types
-019c8599-6845-7772-9c64-5f0ee47c73f1 - Add scope for type casting types - NO ROLLOUT FILE
-YYYY/MM/DD/rollout-....jsonl - NO ENTRY IN session_index.jsonl
-```
-
-For rollout files missing from `session_index.jsonl`, `list` infers a display title from the first readable user/Codex message when possible, while still marking the missing index entry.
-
-Use a specific Codex home directory:
-
-```bash
+# with a specific Codex home dir
 codex-sessions list --codex-home ~/.codex
 ```
+
+Rows are sorted by last session activity where possible. Rows with no timestamp appear above the list. `rename` doesn't move a session.
+
+For rollout files missing from `session_index.jsonl`, `list` infers a display title from the first readable user/Codex message when possible.
 
 `list` and `find` flag rollouts whose stored session ID is missing or disagrees with the filename;
 read-only inspection can continue, but state-changing commands may refuse them.

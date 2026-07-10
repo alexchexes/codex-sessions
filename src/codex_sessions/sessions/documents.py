@@ -16,6 +16,8 @@ from codex_sessions.sessions.rollout import (
 LineGroupRenderer = Callable[[dict[str, Any]], Iterable[tuple[str, Sequence[str]]]]
 MAX_INFERRED_TITLE_CHARS = 80
 MAX_INFERRED_TITLE_WORDS = 12
+ADMINISTRATIVE_RECORD_TYPES = {"session_meta", "world_state"}
+ADMINISTRATIVE_EVENT_TYPES = {"thread_name_updated"}
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,7 @@ class SearchDocument:
     thread_name: str | None
     started_at: datetime | None
     ended_at: datetime | None
+    last_activity_at: datetime | None
     visible_lines: tuple[str, ...]
     metadata_lines: tuple[str, ...]
     tool_input_lines: tuple[str, ...]
@@ -51,6 +54,21 @@ def sanitize(value: Any, redaction: str) -> Any:
     return value
 
 
+def is_session_activity_record(record: dict[str, Any]) -> bool:
+    """Return whether a timestamped rollout record represents session activity."""
+    record_type = record.get("type")
+    if isinstance(record_type, str) and record_type in ADMINISTRATIVE_RECORD_TYPES:
+        return False
+
+    payload = record.get("payload")
+    payload_type = payload.get("type") if isinstance(payload, dict) else None
+    return not (
+        record_type == "event_msg"
+        and isinstance(payload_type, str)
+        and payload_type in ADMINISTRATIVE_EVENT_TYPES
+    )
+
+
 def build_search_document(
     input_path: Path,
     redaction: str,
@@ -63,6 +81,7 @@ def build_search_document(
     thread_name: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
+    last_activity_at: datetime | None = None
     line_groups: dict[str, list[str]] = {
         "visible": [],
         "metadata": [],
@@ -83,6 +102,8 @@ def build_search_document(
         record_timestamp = parse_timestamp(raw_record.get("timestamp"))
         if record_timestamp is not None:
             ended_at = record_timestamp
+            if is_session_activity_record(raw_record):
+                last_activity_at = record_timestamp
 
         payload = raw_record.get("payload")
         if started_at is None:
@@ -114,6 +135,7 @@ def build_search_document(
         thread_name=thread_name,
         started_at=started_at,
         ended_at=ended_at,
+        last_activity_at=last_activity_at,
         visible_lines=tuple(line_groups["visible"]),
         metadata_lines=tuple(line_groups["metadata"]),
         tool_input_lines=tuple(line_groups["tool_inputs"]),
