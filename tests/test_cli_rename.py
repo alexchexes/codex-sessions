@@ -54,6 +54,48 @@ def import_user_message(content: str, timestamp: str) -> dict[str, Any]:
 
 
 class CliRenameTests(unittest.TestCase):
+    def test_rename_updates_archived_index_and_rollout_without_moving_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            archived_dir = codex_home / "archived_sessions"
+            archived_dir.mkdir()
+            session_id = "abababab-abab-abab-abab-abababababab"
+            index_path = codex_home / "session_index.jsonl"
+            rollout_path = archived_dir / f"rollout-2026-04-30T18-20-39-{session_id}.jsonl"
+            write_jsonl(index_path, [{"id": session_id, "thread_name": "Old archived title"}])
+            write_jsonl(
+                rollout_path,
+                [import_user_message("Archived body", "2026-04-30T18:20:39Z")],
+            )
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(
+                    [
+                        "rename",
+                        "--codex-home",
+                        str(codex_home),
+                        "--no-reset-state-cache",
+                        session_id,
+                        "New archived title",
+                    ]
+                )
+
+            rollout_records = read_jsonl(rollout_path)
+            title_events = [
+                record
+                for record in rollout_records
+                if record.get("type") == "event_msg"
+                and record.get("payload", {}).get("type") == "thread_name_updated"
+            ]
+
+            self.assertEqual(result, 0)
+            self.assertEqual(read_jsonl(index_path)[0]["thread_name"], "New archived title")
+            self.assertEqual(title_events[-1]["payload"]["thread_name"], "New archived title")
+            self.assertTrue(rollout_path.exists())
+            self.assertFalse((codex_home / "sessions").exists())
+            self.assertIn(str(rollout_path), buffer.getvalue())
+
     def test_rename_refuses_filename_fallback_without_partial_index_update(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)

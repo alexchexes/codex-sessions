@@ -49,10 +49,14 @@ from codex_sessions.sessions.documents import (
     build_search_document as build_session_document,
 )
 from codex_sessions.sessions.files import (
+    ARCHIVES_INCLUDE,
     SessionFile,
     discover_session_paths,
     file_modified_at,
     format_session_file_path,
+    format_session_root_path,
+    is_archived_session_path,
+    session_roots,
 )
 from codex_sessions.sessions.index import normalize_session_id, read_session_index
 from codex_sessions.sessions.message_content import content_to_text, searchable_user_message_text
@@ -322,6 +326,7 @@ def load_search_documents(
     redaction: str,
     *,
     session_paths: Sequence[Path] | None = None,
+    warning_path_prefix: str | None = None,
     use_cache: bool = True,
     rebuild_cache: bool = False,
 ) -> tuple[list[tuple[Path, SearchDocument]], list[str]]:
@@ -366,10 +371,14 @@ def load_search_documents(
                     metadata_cache_dirty = True
             if document.identity_warning is not None:
                 relative_path = format_session_file_path(session_path, sessions_dir)
+                if warning_path_prefix is not None:
+                    relative_path = f"{warning_path_prefix}/{relative_path}"
                 warnings.append(f"{relative_path}: {document.identity_warning}")
             documents.append((session_path, document))
         except (OSError, ValueError) as exc:
             relative_path = format_session_file_path(session_path, sessions_dir)
+            if warning_path_prefix is not None:
+                relative_path = f"{warning_path_prefix}/{relative_path}"
             warnings.append(f"{relative_path}: {exc}")
             if cache_entries is not None:
                 cache_entries.pop(search_cache_key(session_path), None)
@@ -406,28 +415,69 @@ def search_sessions(
     sessions_dir: Path | None = None,
     *,
     session_paths: Sequence[Path] | None = None,
+    archives: str = ARCHIVES_INCLUDE,
     use_cache: bool = True,
     rebuild_cache: bool = False,
 ) -> tuple[list[SearchResult], list[str]]:
     resolved_sessions_dir = sessions_dir or codex_home / "sessions"
-    if not resolved_sessions_dir.exists():
-        raise CliError(f"Sessions directory not found: {resolved_sessions_dir}")
 
     index_path = session_index_path or codex_home / "session_index.jsonl"
     index_entries = read_session_index(index_path)
     entries_by_id = {normalize_session_id(entry.session_id): entry for entry in index_entries}
     search_pattern = compile_search_pattern(options)
-    documents, warnings = load_search_documents(
-        codex_home=codex_home,
-        sessions_dir=resolved_sessions_dir,
-        redaction=options.redaction,
-        session_paths=session_paths,
-        use_cache=use_cache,
-        rebuild_cache=rebuild_cache,
-    )
+    located_documents: list[tuple[Path, SearchDocument, bool, str]] = []
+    warnings: list[str] = []
+    if session_paths is not None:
+        documents, path_warnings = load_search_documents(
+            codex_home=codex_home,
+            sessions_dir=resolved_sessions_dir,
+            redaction=options.redaction,
+            session_paths=session_paths,
+            use_cache=use_cache,
+            rebuild_cache=rebuild_cache,
+        )
+        warnings.extend(path_warnings)
+        for session_path, document in documents:
+            archived = is_archived_session_path(
+                session_path,
+                codex_home,
+                sessions_dir=sessions_dir,
+            )
+            relative_path = (
+                f"archived_sessions/{session_path.name}"
+                if archived
+                else format_session_file_path(session_path, resolved_sessions_dir)
+            )
+            located_documents.append((session_path, document, archived, relative_path))
+    else:
+        roots = session_roots(codex_home, sessions_dir, archives=archives)
+        any_root_exists = any(root.path.exists() for root in roots)
+        for root in roots:
+            if not root.path.exists():
+                if root.required and not any_root_exists:
+                    raise CliError(f"Sessions directory not found: {root.path}")
+                continue
+            documents, root_warnings = load_search_documents(
+                codex_home=codex_home,
+                sessions_dir=root.path,
+                redaction=options.redaction,
+                warning_path_prefix="archived_sessions" if root.archived else None,
+                use_cache=use_cache,
+                rebuild_cache=rebuild_cache,
+            )
+            warnings.extend(root_warnings)
+            located_documents.extend(
+                (
+                    session_path,
+                    document,
+                    root.archived,
+                    format_session_root_path(session_path, root),
+                )
+                for session_path, document in documents
+            )
 
     results = []
-    for session_path, document in documents:
+    for session_path, document, archived, relative_path in located_documents:
         search_lines = search_document_lines(document, options)
         all_lines = search_matching_lines(search_lines, search_pattern, options.line_width)
         if options.max_lines_per_session:
@@ -443,7 +493,7 @@ def search_sessions(
 
         session_file = SessionFile(
             path=session_path,
-            relative_path=format_session_file_path(session_path, resolved_sessions_dir),
+            relative_path=relative_path,
             session_id=document.session_id,
             started_at=document.started_at,
             ended_at=document.last_activity_at,
@@ -451,6 +501,7 @@ def search_sessions(
             identity_warning=document.identity_warning,
             identity_status=document.identity_status,
             modified_at=file_modified_at(session_path),
+            archived=archived,
         )
         inferred_title = infer_search_document_title(document)
         session = session_display_info_for_search(session_file, entries_by_id, inferred_title)

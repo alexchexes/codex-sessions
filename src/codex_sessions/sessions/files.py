@@ -10,6 +10,10 @@ from codex_sessions.sessions.index import SESSION_ID_RE, is_session_id, normaliz
 FILENAME_ID_MISMATCH_STATUS = "FILENAME ID MISMATCH"
 INVALID_SESSION_META_FILENAME_ID_STATUS = "INVALID RECORD-1 session_meta; USING ID FROM FILENAME"
 INVALID_SESSION_META_NO_ID_STATUS = "INVALID RECORD-1 session_meta; NO SESSION ID"
+ARCHIVES_EXCLUDE = "exclude"
+ARCHIVES_INCLUDE = "include"
+ARCHIVES_ONLY = "only"
+ARCHIVE_SCOPES = (ARCHIVES_EXCLUDE, ARCHIVES_INCLUDE, ARCHIVES_ONLY)
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,14 @@ class SessionFile:
     identity_warning: str | None = None
     identity_status: str | None = None
     modified_at: datetime | None = None
+    archived: bool = False
+
+
+@dataclass(frozen=True)
+class SessionRoot:
+    path: Path
+    archived: bool
+    required: bool
 
 
 def session_id_from_path(path: Path) -> str | None:
@@ -164,12 +176,69 @@ def format_session_file_path(path: Path, sessions_dir: Path) -> str:
     return relative_path.as_posix()
 
 
+def format_session_root_path(path: Path, root: SessionRoot) -> str:
+    relative_path = format_session_file_path(path, root.path)
+    if root.archived:
+        return f"archived_sessions/{relative_path}"
+    return relative_path
+
+
+def session_roots(
+    codex_home: Path,
+    sessions_dir: Path | None = None,
+    *,
+    archives: str = ARCHIVES_EXCLUDE,
+) -> tuple[SessionRoot, ...]:
+    if archives not in ARCHIVE_SCOPES:
+        raise ValueError(f"Unknown archive scope: {archives}")
+
+    if sessions_dir is not None:
+        return (SessionRoot(path=sessions_dir, archived=False, required=True),)
+
+    roots: list[SessionRoot] = []
+    if archives != ARCHIVES_ONLY:
+        roots.append(
+            SessionRoot(
+                path=codex_home / "sessions",
+                archived=False,
+                required=True,
+            )
+        )
+    if archives != ARCHIVES_EXCLUDE:
+        roots.append(
+            SessionRoot(
+                path=codex_home / "archived_sessions",
+                archived=True,
+                required=False,
+            )
+        )
+    return tuple(roots)
+
+
+def is_archived_session_path(
+    path: Path,
+    codex_home: Path,
+    *,
+    sessions_dir: Path | None = None,
+) -> bool:
+    if sessions_dir is not None:
+        return False
+    try:
+        path.resolve().relative_to((codex_home / "archived_sessions").resolve())
+    except ValueError:
+        return False
+    return True
+
+
 def file_modified_at(path: Path) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
 
 
 def discover_session_files(
-    sessions_dir: Path, *, include_ended_at: bool = False
+    sessions_dir: Path,
+    *,
+    include_ended_at: bool = False,
+    archived: bool = False,
 ) -> list[SessionFile]:
     if not sessions_dir.exists():
         return []
@@ -181,7 +250,11 @@ def discover_session_files(
         session_files.append(
             SessionFile(
                 path=path,
-                relative_path=format_session_file_path(path, sessions_dir),
+                relative_path=(
+                    f"archived_sessions/{format_session_file_path(path, sessions_dir)}"
+                    if archived
+                    else format_session_file_path(path, sessions_dir)
+                ),
                 session_id=metadata.identity.session_id,
                 started_at=metadata.started_at,
                 ended_at=metadata.ended_at,
@@ -189,6 +262,7 @@ def discover_session_files(
                 identity_warning=metadata.identity.warning,
                 identity_status=metadata.identity.status,
                 modified_at=file_modified_at(path),
+                archived=archived,
             )
         )
     return session_files

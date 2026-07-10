@@ -3,7 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -26,6 +26,171 @@ def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
 
 
 class CliFindScopeTests(unittest.TestCase):
+    def test_find_defaults_to_archive_when_active_sessions_directory_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            archived_dir = codex_home / "archived_sessions"
+            archived_dir.mkdir()
+
+            archived_id = "03030303-0303-0303-0303-030303030303"
+            write_jsonl(
+                archived_dir / f"rollout-2026-04-30T19-00-00-{archived_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T19:01:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": "archive-only needle",
+                        },
+                    }
+                ],
+            )
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                result = main(
+                    [
+                        "find",
+                        "archive-only needle",
+                        "--codex-home",
+                        str(codex_home),
+                        "--no-cache",
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            self.assertIn("archive-only needle", stdout.getvalue())
+            self.assertIn("ARCHIVED", stdout.getvalue())
+
+    def test_find_archive_scopes_and_explicit_session_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            archived_dir = codex_home / "archived_sessions"
+            sessions_day.mkdir(parents=True)
+            archived_dir.mkdir()
+
+            active_id = "01010101-0101-0101-0101-010101010101"
+            archived_id = "02020202-0202-0202-0202-020202020202"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [
+                    {"id": active_id, "thread_name": "Active find session"},
+                    {"id": archived_id, "thread_name": "Archived find session"},
+                ],
+            )
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-00-00-{active_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T18:01:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": "scope needle from active",
+                        },
+                    }
+                ],
+            )
+            write_jsonl(
+                archived_dir / f"rollout-2026-04-30T19-00-00-{archived_id}.jsonl",
+                [
+                    {
+                        "timestamp": "2026-04-30T19:01:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": "scope needle from archive",
+                        },
+                    }
+                ],
+            )
+
+            def run_find(*args: str) -> tuple[int, str, str]:
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    result = main(["find", *args, "--codex-home", str(codex_home), "--no-cache"])
+                return result, stdout.getvalue(), stderr.getvalue()
+
+            default_result, default_output, _ = run_find("scope needle")
+            active_result, active_output, _ = run_find("--archives", "exclude", "scope needle")
+            archived_result, archived_output, _ = run_find("--archives", "only", "scope needle")
+            explicit_result, explicit_output, explicit_error = run_find(
+                "--archives",
+                "exclude",
+                "--session",
+                archived_id,
+                "scope needle",
+            )
+
+            self.assertEqual(default_result, 0)
+            self.assertIn("scope needle from active", default_output)
+            self.assertIn("scope needle from archive", default_output)
+            self.assertIn("ARCHIVED", default_output)
+
+            self.assertEqual(active_result, 0)
+            self.assertIn("scope needle from active", active_output)
+            self.assertNotIn("scope needle from archive", active_output)
+
+            self.assertEqual(archived_result, 0)
+            self.assertNotIn("scope needle from active", archived_output)
+            self.assertIn("scope needle from archive", archived_output)
+            self.assertIn("ARCHIVED", archived_output)
+
+            self.assertEqual(explicit_result, 0)
+            self.assertIn("scope needle from archive", explicit_output)
+            self.assertIn("--archives is ignored when --session is used", explicit_error)
+
+    def test_find_archive_warning_includes_archive_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            codex_home.joinpath("sessions").mkdir()
+            archived_dir = codex_home / "archived_sessions"
+            archived_dir.mkdir()
+
+            filename_id = "04040404-0404-0404-0404-040404040404"
+            metadata_id = "05050505-0505-0505-0505-050505050505"
+            rollout_name = f"rollout-2026-04-30T19-00-00-{filename_id}.jsonl"
+            write_jsonl(
+                archived_dir / rollout_name,
+                [
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": metadata_id},
+                    },
+                    {
+                        "timestamp": "2026-04-30T19:01:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": "archive warning needle",
+                        },
+                    },
+                ],
+            )
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                result = main(
+                    [
+                        "find",
+                        "archive warning needle",
+                        "--codex-home",
+                        str(codex_home),
+                        "--no-cache",
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            self.assertIn(f"archived_sessions/{rollout_name}", stderr.getvalue())
+
     def test_find_scopes_search_to_session_id_or_exact_title(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
@@ -367,6 +532,29 @@ class CliFindScopeTests(unittest.TestCase):
             output = buffer.getvalue()
             self.assertEqual(result, 0)
             self.assertIn("needle from custom sessions dir", output)
+
+            archive_buffer = StringIO()
+            archive_errors = StringIO()
+            with redirect_stdout(archive_buffer), redirect_stderr(archive_errors):
+                archive_result = main(
+                    [
+                        "find",
+                        "needle",
+                        "--codex-home",
+                        str(codex_home),
+                        "--sessions-dir",
+                        str(root / "custom-sessions"),
+                        "--archives",
+                        "only",
+                    ]
+                )
+
+            self.assertEqual(archive_result, 0)
+            self.assertIn("needle from custom sessions dir", archive_buffer.getvalue())
+            self.assertIn(
+                "--archives is ignored when --sessions-dir is used",
+                archive_errors.getvalue(),
+            )
 
     def test_find_session_scope_reports_unknown_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -16,11 +16,12 @@ from codex_sessions.sessions.cache import (
     write_session_cache,
 )
 from codex_sessions.sessions.files import (
+    ARCHIVES_INCLUDE,
     discover_session_files,
     discover_session_paths,
-    format_session_file_path,
     read_session_file_metadata,
     read_session_identity,
+    session_roots,
 )
 from codex_sessions.sessions.index import (
     is_session_id,
@@ -114,11 +115,11 @@ def resolve_session_id(
     sessions_dir: Path | None = None,
     require_canonical: bool = False,
 ) -> Path:
-    resolved_sessions_dir = sessions_dir or codex_home / "sessions"
     normalized_id = normalize_session_id(session_id)
     matches = [
         session_file
-        for session_file in discover_session_files(resolved_sessions_dir)
+        for root in session_roots(codex_home, sessions_dir, archives=ARCHIVES_INCLUDE)
+        for session_file in discover_session_files(root.path, archived=root.archived)
         if (
             session_file.session_id
             and normalize_session_id(session_file.session_id) == normalized_id
@@ -127,10 +128,7 @@ def resolve_session_id(
     if not matches:
         raise CliError(f"No Codex session found for ID: {session_id}")
     if len(matches) > 1:
-        rendered_matches = ", ".join(
-            format_session_file_path(session_file.path, resolved_sessions_dir)
-            for session_file in matches
-        )
+        rendered_matches = ", ".join(session_file.relative_path for session_file in matches)
         raise CliError(
             f"Multiple Codex session files found for ID {session_id}: {rendered_matches}"
         )

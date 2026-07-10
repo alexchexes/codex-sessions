@@ -19,8 +19,17 @@ from codex_sessions.sessions.display import (  # noqa: E402
     format_local_timestamp,
     local_timezone_offset_label,
 )
-from codex_sessions.sessions.files import file_modified_at, session_id_from_path  # noqa: E402
-from codex_sessions.sessions.index_workflows import list_session_lines  # noqa: E402
+from codex_sessions.sessions.files import (  # noqa: E402
+    ARCHIVES_EXCLUDE,
+    ARCHIVES_INCLUDE,
+    ARCHIVES_ONLY,
+    file_modified_at,
+    session_id_from_path,
+)
+from codex_sessions.sessions.index_workflows import (  # noqa: E402
+    list_session_lines,
+    list_session_lines_with_warnings,
+)
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
@@ -62,6 +71,128 @@ def import_user_message(content: str, timestamp: str) -> dict[str, Any]:
 
 
 class CliListTests(unittest.TestCase):
+    def test_list_archive_scopes_hide_label_and_isolate_archived_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            archived_dir = codex_home / "archived_sessions"
+            sessions_day.mkdir(parents=True)
+            archived_dir.mkdir()
+
+            active_id = "10101010-1010-1010-1010-101010101010"
+            archived_id = "20202020-2020-2020-2020-202020202020"
+            missing_id = "30303030-3030-3030-3030-303030303030"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [
+                    {"id": active_id, "thread_name": "Active session"},
+                    {"id": archived_id, "thread_name": "Archived session"},
+                    {
+                        "id": missing_id,
+                        "thread_name": "Actually missing",
+                        "updated_at": "2026-04-30T20:00:00Z",
+                    },
+                ],
+            )
+            write_jsonl(
+                sessions_day / f"rollout-2026-04-30T18-00-00-{active_id}.jsonl",
+                [import_user_message("active body", "2026-04-30T18:00:00Z")],
+            )
+            write_jsonl(
+                archived_dir / f"rollout-2026-04-30T19-00-00-{archived_id}.jsonl",
+                [import_user_message("archived body", "2026-04-30T19:00:00Z")],
+            )
+
+            active_lines = list_session_lines(
+                codex_home, archives=ARCHIVES_EXCLUDE, use_cache=False
+            )
+            all_lines = list_session_lines(codex_home, archives=ARCHIVES_INCLUDE, use_cache=False)
+            archived_lines = list_session_lines(codex_home, archives=ARCHIVES_ONLY, use_cache=False)
+
+            self.assertTrue(any(active_id in line for line in active_lines))
+            self.assertFalse(any(archived_id in line for line in active_lines))
+            self.assertTrue(
+                any(missing_id in line and "NO ROLLOUT FILE" in line for line in active_lines)
+            )
+
+            archived_line = next(line for line in all_lines if archived_id in line)
+            self.assertIn("ARCHIVED", archived_line)
+            self.assertNotIn("NO ROLLOUT FILE", archived_line)
+            self.assertTrue(any(active_id in line for line in all_lines))
+
+            self.assertEqual(len(archived_lines), 1)
+            self.assertIn(archived_id, archived_lines[0])
+            self.assertIn("ARCHIVED", archived_lines[0])
+            self.assertNotIn(active_id, archived_lines[0])
+            self.assertNotIn(missing_id, archived_lines[0])
+
+    def test_list_includes_all_rollouts_with_duplicate_session_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
+            archived_dir = codex_home / "archived_sessions"
+            sessions_day.mkdir(parents=True)
+            archived_dir.mkdir()
+
+            session_id = "40404040-4040-4040-4040-404040404040"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Duplicate session"}],
+            )
+            active_path = sessions_day / f"rollout-active-{session_id}.jsonl"
+            archived_path = archived_dir / f"rollout-archived-{session_id}.jsonl"
+            write_jsonl(active_path, [import_user_message("active", "2026-04-30T18:00:00Z")])
+            write_jsonl(
+                archived_path,
+                [import_user_message("archived", "2026-04-30T19:00:00Z")],
+            )
+
+            lines, warnings = list_session_lines_with_warnings(
+                codex_home,
+                archives=ARCHIVES_INCLUDE,
+                use_cache=False,
+            )
+
+            matching_lines = [line for line in lines if session_id in line]
+            self.assertEqual(len(matching_lines), 2)
+            self.assertEqual(sum("ARCHIVED" in line for line in matching_lines), 1)
+            self.assertTrue(
+                any("multiple rollout files" in warning.casefold() for warning in warnings)
+            )
+            self.assertTrue(any(active_path.name in warning for warning in warnings))
+            self.assertTrue(any(archived_path.name in warning for warning in warnings))
+
+    def test_list_archive_warning_includes_archive_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            codex_home.joinpath("sessions").mkdir()
+            archived_dir = codex_home / "archived_sessions"
+            archived_dir.mkdir()
+
+            filename_id = "50505050-5050-5050-5050-505050505050"
+            metadata_id = "60606060-6060-6060-6060-606060606060"
+            rollout_name = f"rollout-2026-04-30T19-00-00-{filename_id}.jsonl"
+            write_jsonl(
+                archived_dir / rollout_name,
+                [
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": metadata_id},
+                    },
+                    import_user_message("archived", "2026-04-30T19:00:00Z"),
+                ],
+            )
+
+            _, warnings = list_session_lines_with_warnings(
+                codex_home,
+                archives=ARCHIVES_INCLUDE,
+                use_cache=False,
+            )
+
+            self.assertTrue(
+                any(f"archived_sessions/{rollout_name}" in warning for warning in warnings)
+            )
+
     def test_list_marks_filename_fallback_on_affected_session_row(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)

@@ -28,9 +28,14 @@ from codex_sessions.sessions.documents import (
     inferred_thread_name,
 )
 from codex_sessions.sessions.files import (
+    ARCHIVES_EXCLUDE,
+    ARCHIVES_ONLY,
     SessionFile,
+    discover_session_files,
     file_modified_at,
     format_session_file_path,
+    format_session_root_path,
+    session_roots,
 )
 from codex_sessions.sessions.index import (
     append_session_index_records,
@@ -91,6 +96,7 @@ def list_session_lines(
     session_index_path: Path | None = None,
     sessions_dir: Path | None = None,
     *,
+    archives: str = ARCHIVES_EXCLUDE,
     use_cache: bool = True,
     rebuild_cache: bool = False,
 ) -> list[str]:
@@ -98,6 +104,7 @@ def list_session_lines(
         codex_home=codex_home,
         session_index_path=session_index_path,
         sessions_dir=sessions_dir,
+        archives=archives,
         use_cache=use_cache,
         rebuild_cache=rebuild_cache,
     )
@@ -109,6 +116,7 @@ def list_session_lines_with_warnings(
     session_index_path: Path | None = None,
     sessions_dir: Path | None = None,
     *,
+    archives: str = ARCHIVES_EXCLUDE,
     use_cache: bool = True,
     rebuild_cache: bool = False,
 ) -> tuple[list[str], list[str]]:
@@ -116,6 +124,7 @@ def list_session_lines_with_warnings(
         codex_home=codex_home,
         session_index_path=session_index_path,
         sessions_dir=sessions_dir,
+        archives=archives,
         use_cache=use_cache,
         rebuild_cache=rebuild_cache,
     )
@@ -127,53 +136,83 @@ def list_session_display_infos_with_warnings(
     session_index_path: Path | None = None,
     sessions_dir: Path | None = None,
     *,
+    archives: str = ARCHIVES_EXCLUDE,
     use_cache: bool = True,
     rebuild_cache: bool = False,
 ) -> tuple[list[SessionDisplayInfo], list[str]]:
     index_path = session_index_path or codex_home / "session_index.jsonl"
-    resolved_sessions_dir = sessions_dir or codex_home / "sessions"
-
     index_entries = read_session_index(index_path)
-    documents, warnings = load_search_documents(
-        codex_home=codex_home,
-        sessions_dir=resolved_sessions_dir,
-        redaction="...",
-        use_cache=use_cache,
-        rebuild_cache=rebuild_cache,
-    )
-    session_files_with_titles = [
-        (
-            SessionFile(
-                path=session_path,
-                relative_path=format_session_file_path(session_path, resolved_sessions_dir),
-                session_id=document.session_id,
-                started_at=document.started_at,
-                ended_at=document.last_activity_at,
-                session_id_is_canonical=document.session_id_is_canonical,
-                identity_warning=document.identity_warning,
-                identity_status=document.identity_status,
-                modified_at=file_modified_at(session_path),
-            ),
-            infer_search_document_title(document),
+    warnings: list[str] = []
+    session_files_with_titles: list[tuple[SessionFile, str | None]] = []
+    for root in session_roots(codex_home, sessions_dir, archives=archives):
+        if not root.path.exists() and not root.required:
+            continue
+        documents, root_warnings = load_search_documents(
+            codex_home=codex_home,
+            sessions_dir=root.path,
+            redaction="...",
+            warning_path_prefix="archived_sessions" if root.archived else None,
+            use_cache=use_cache,
+            rebuild_cache=rebuild_cache,
         )
-        for session_path, document in documents
-    ]
+        warnings.extend(root_warnings)
+        session_files_with_titles.extend(
+            (
+                SessionFile(
+                    path=session_path,
+                    relative_path=format_session_root_path(session_path, root),
+                    session_id=document.session_id,
+                    started_at=document.started_at,
+                    ended_at=document.last_activity_at,
+                    session_id_is_canonical=document.session_id_is_canonical,
+                    identity_warning=document.identity_warning,
+                    identity_status=document.identity_status,
+                    modified_at=file_modified_at(session_path),
+                    archived=root.archived,
+                ),
+                infer_search_document_title(document),
+            )
+            for session_path, document in documents
+        )
     session_files_by_id: dict[str, list[SessionFile]] = {}
     for session_file, _inferred_title in session_files_with_titles:
         if session_file.session_id:
             normalized_id = normalize_session_id(session_file.session_id)
             session_files_by_id.setdefault(normalized_id, []).append(session_file)
+    for matching_files in session_files_by_id.values():
+        if len(matching_files) > 1:
+            rendered_matches = ", ".join(
+                session_file.relative_path for session_file in matching_files
+            )
+            warnings.append(
+                f"Multiple rollout files have session ID {matching_files[0].session_id}: "
+                f"{rendered_matches}"
+            )
 
     # Build index rows before rollout-only rows so equal timestamps retain stable cross-check order.
     indexed_ids = {normalize_session_id(entry.session_id) for entry in index_entries}
+    excluded_archived_ids: set[str] = set()
+    if archives == ARCHIVES_EXCLUDE and sessions_dir is None:
+        # TODO: Replace this scan when list and transfer share an archive-aware cache.
+        excluded_archived_ids = {
+            normalize_session_id(session_file.session_id)
+            for session_file in discover_session_files(
+                codex_home / "archived_sessions", archived=True
+            )
+            if session_file.session_id
+        }
     infos = []
     for entry in index_entries:
-        matching_files = session_files_by_id.get(normalize_session_id(entry.session_id), [])
+        normalized_id = normalize_session_id(entry.session_id)
+        matching_files = session_files_by_id.get(normalized_id, [])
         if not matching_files:
+            if archives == ARCHIVES_ONLY or normalized_id in excluded_archived_ids:
+                continue
             infos.append(indexed_session_display_info(entry, None))
             continue
-        session_file = matching_files[0]
-        infos.append(indexed_session_display_info(entry, session_file))
+        infos.extend(
+            indexed_session_display_info(entry, session_file) for session_file in matching_files
+        )
 
     for session_file, inferred_title in session_files_with_titles:
         if session_file.session_id and normalize_session_id(session_file.session_id) in indexed_ids:

@@ -47,6 +47,7 @@ from codex_sessions.sessions.display import (
     local_timezone_offset_label,
     styled_session_display_text,
 )
+from codex_sessions.sessions.files import ARCHIVES_EXCLUDE, ARCHIVES_INCLUDE
 from codex_sessions.sessions.index_workflows import (
     RepairIndexCandidate,
     list_session_display_infos_with_warnings,
@@ -135,15 +136,22 @@ def run_list_command(args: argparse.Namespace) -> int:
         if args.session_index
         else codex_home / "session_index.jsonl"
     )
-    sessions_dir = (
-        args.sessions_dir.expanduser().resolve() if args.sessions_dir else codex_home / "sessions"
-    )
+    sessions_dir = args.sessions_dir.expanduser().resolve() if args.sessions_dir else None
+    archives = args.archives or ARCHIVES_EXCLUDE
+    if sessions_dir is not None and args.archives is not None:
+        print_cli_line(
+            "Notice: --archives is ignored when --sessions-dir is used.",
+            style=STYLE_ATTENTION,
+            stream=sys.stderr,
+        )
+        archives = ARCHIVES_EXCLUDE
 
     try:
         session_infos, warnings = list_session_display_infos_with_warnings(
             codex_home=codex_home,
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
+            archives=archives,
             use_cache=not args.no_cache,
             rebuild_cache=args.rebuild_cache,
         )
@@ -158,7 +166,7 @@ def run_list_command(args: argparse.Namespace) -> int:
         )
     for info in session_infos:
         print_cli_line(styled_session_display_text(info, sys.stdout.encoding))
-    if any(info.status == NO_SESSION_INDEX_ENTRY for info in session_infos):
+    if any(info.status == NO_SESSION_INDEX_ENTRY and not info.archived for info in session_infos):
         print_cli_line()
         print_cli_line(
             "Run 'codex-sessions repair-index' to add missing session_index.jsonl entries.",
@@ -200,9 +208,7 @@ def run_search_command(args: argparse.Namespace) -> int:
         if args.session_index
         else codex_home / "session_index.jsonl"
     )
-    sessions_dir = (
-        args.sessions_dir.expanduser().resolve() if args.sessions_dir else codex_home / "sessions"
-    )
+    sessions_dir = args.sessions_dir.expanduser().resolve() if args.sessions_dir else None
     options = SearchOptions(
         pattern=args.pattern,
         regex=args.regex,
@@ -220,6 +226,21 @@ def run_search_command(args: argparse.Namespace) -> int:
     )
 
     try:
+        archives = args.archives or ARCHIVES_INCLUDE
+        if args.session and args.archives is not None:
+            print_cli_line(
+                "Notice: --archives is ignored when --session is used.",
+                style=STYLE_ATTENTION,
+                stream=sys.stderr,
+            )
+            archives = ARCHIVES_INCLUDE
+        elif sessions_dir is not None and args.archives is not None:
+            print_cli_line(
+                "Notice: --archives is ignored when --sessions-dir is used.",
+                style=STYLE_ATTENTION,
+                stream=sys.stderr,
+            )
+            archives = ARCHIVES_EXCLUDE
         session_paths = resolve_session_target_paths(
             args.session,
             codex_home,
@@ -232,6 +253,7 @@ def run_search_command(args: argparse.Namespace) -> int:
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
             session_paths=session_paths or None,
+            archives=archives,
             use_cache=not args.no_cache,
             rebuild_cache=args.rebuild_cache,
         )

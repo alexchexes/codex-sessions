@@ -10,6 +10,7 @@ from codex_sessions.formats.markdown.timing import (
     DEFAULT_TOOL_DURATION_THRESHOLD_SECONDS,
 )
 from codex_sessions.formats.markdown.tools import DEFAULT_TOOL_PREVIEW_CHARS
+from codex_sessions.sessions.files import ARCHIVE_SCOPES
 
 MARKDOWN_FEATURES = {"tools", "metadata", "raw"}
 MARKDOWN_TOOL_MODES = {"auto", "none", "names", "smart", "preview", "full"}
@@ -83,6 +84,17 @@ def default_user_skills_dir() -> Path:
     return Path.home() / ".agents" / "skills"
 
 
+def add_archives_arg(parser: argparse.ArgumentParser, *, default_scope: str) -> None:
+    parser.add_argument(
+        "--archives",
+        choices=ARCHIVE_SCOPES,
+        default=None,
+        help=(
+            f"Archive scope: exclude, include, or only archived sessions. Default: {default_scope}."
+        ),
+    )
+
+
 def parse_list_args(
     argv: Sequence[str] | None = None, prog: str = DEFAULT_CLI_PROG
 ) -> argparse.Namespace:
@@ -108,6 +120,7 @@ def parse_list_args(
         type=Path,
         help="Path to Codex sessions directory. Defaults to <codex-home>/sessions.",
     )
+    add_archives_arg(parser, default_scope="exclude")
     parser.add_argument(
         "--no-cache",
         action="store_true",
@@ -215,6 +228,7 @@ def parse_search_args(
         type=Path,
         help="Path to Codex sessions directory. Defaults to <codex-home>/sessions.",
     )
+    add_archives_arg(parser, default_scope="include")
     parser.add_argument(
         "--redact-encrypted",
         default="...",

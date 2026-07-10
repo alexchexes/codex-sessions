@@ -367,6 +367,53 @@ class ConversionPathsTests(unittest.TestCase):
         self.assertEqual(resolved.path, rollout.resolve())
         self.assertEqual(resolved.output_stem, session_id)
 
+    def test_resolve_conversion_input_finds_archived_id_and_title_but_latest_stays_active(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir) / ".codex"
+            sessions_day = codex_home / "sessions" / "2026" / "05" / "28"
+            archived_dir = codex_home / "archived_sessions"
+            sessions_day.mkdir(parents=True)
+            archived_dir.mkdir()
+
+            active_id = "019f0000-0000-7000-8000-000000000010"
+            archived_id = "019f0000-0000-7000-8000-000000000020"
+            active_path = sessions_day / f"rollout-2026-05-28T10-00-00-{active_id}.jsonl"
+            archived_path = archived_dir / f"rollout-2026-05-29T10-00-00-{archived_id}.jsonl"
+            write_jsonl(
+                active_path,
+                [
+                    {
+                        "timestamp": "2026-05-28T10:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": active_id},
+                    }
+                ],
+            )
+            write_jsonl(
+                archived_path,
+                [
+                    {
+                        "timestamp": "2026-05-29T10:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": archived_id},
+                    }
+                ],
+            )
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": archived_id, "thread_name": "Archived conversion"}],
+            )
+
+            by_id = resolve_conversion_input(Path(archived_id), codex_home)
+            by_title = resolve_conversion_input(Path("Archived conversion"), codex_home)
+            latest = resolve_conversion_input(Path("latest"), codex_home)
+
+        self.assertEqual(by_id.path, archived_path.resolve())
+        self.assertEqual(by_title.path, archived_path.resolve())
+        self.assertEqual(latest.path, active_path.resolve())
+
 
 def write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

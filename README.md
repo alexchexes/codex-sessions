@@ -237,9 +237,13 @@ codex-sessions list
 
 # with a specific Codex home dir
 codex-sessions list --codex-home ~/.codex
+
+# include archived sessions, or list only archived sessions
+codex-sessions list --archives include
+codex-sessions list --archives only
 ```
 
-Rows are sorted by last session activity where possible. Rows with no timestamp appear above the list. `rename` doesn't move a session.
+`list` shows active sessions by default. Archived sessions are marked `ARCHIVED` when included and are not reported as missing rollout files. Rows are sorted by last session activity where possible; rows with no timestamp appear above the list.
 
 For rollout files missing from `session_index.jsonl`, `list` infers a display title from the first readable user/Codex message when possible.
 
@@ -260,7 +264,7 @@ Apply those repairs:
 codex-sessions repair-index
 ```
 
-`repair-index --dry-run` does not modify Codex state. The real repair command backs up `session_index.jsonl` under `backups/codex-sessions/`, appends missing entries, and resets Codex state cache by moving root `state_*.sqlite*` files into the same backup folder. Rollouts without a valid authoritative record-1 ID are warned about and skipped rather than indexed from a filename fallback. If state cache reset is blocked by a running Codex session, the repaired index stays written and the command prompts for a retry in an interactive terminal.
+`repair-index` currently scans active sessions only; archive repair behavior is deferred. `repair-index --dry-run` does not modify Codex state. The real repair command backs up `session_index.jsonl` under `backups/codex-sessions/`, appends missing entries, and resets Codex state cache by moving root `state_*.sqlite*` files into the same backup folder. Rollouts without a valid authoritative record-1 ID are warned about and skipped rather than indexed from a filename fallback. If state cache reset is blocked by a running Codex session, the repaired index stays written and the command prompts for a retry in an interactive terminal.
 
 ### Rename sessions
 
@@ -270,7 +274,7 @@ Rename a session in `session_index.jsonl`:
 codex-sessions rename 019dd5ce-19e1-78c3-9313-325228ddd983 "Better session title"
 ```
 
-`rename` also updates the rollout `thread_name_updated` event when a rollout file is available, backs up changed files under `backups/codex-sessions/`, and resets Codex state cache. It refuses to modify a rollout whose record-1 session metadata is invalid. You can use an exact current title instead of an ID, but if multiple sessions have that title the command will ask you to rerun with one concrete ID.
+`rename` also updates the rollout `thread_name_updated` event when a rollout file is available, including when the session is archived. Renaming does not move a session between active and archived storage. The command backs up changed files under `backups/codex-sessions/` and resets Codex state cache. It refuses to modify a rollout whose record-1 session metadata is invalid. You can use an exact current title instead of an ID, but if multiple sessions have that title the command will ask you to rerun with one concrete ID.
 
 ### Export sessions
 
@@ -356,7 +360,7 @@ Search all Codex sessions:
 codex-sessions find -i "dadata-sdk"
 ```
 
-By default, `find` searches visible user and Codex messages only. Use `--metadata` to also search compact session metadata such as cwd and repository URL, `--tools` to also search concise tool input/output previews such as shell commands and command output snippets, or `--all` to include both metadata and tools.
+By default, `find` searches active and archived sessions, and searches visible user and Codex messages only. Use `--archives exclude` for active sessions only or `--archives only` for archived sessions only. Use `--metadata` to also search compact session metadata such as cwd and repository URL, `--tools` to also search concise tool input/output previews such as shell commands and command output snippets, or `--all` to include both metadata and tools.
 
 Limit search to one or more sessions with `--session`. Targets may be session IDs, exact titles, rollout paths, or `latest`:
 
@@ -364,6 +368,10 @@ Limit search to one or more sessions with `--session`. Targets may be session ID
 codex-sessions find --session 019dd5ce-19e1-78c3-9313-325228ddd983 "needle"
 codex-sessions find --session "Fix schema mismatch for enums" --tools "rg -n"
 ```
+
+Explicit `--session` targets can resolve archived sessions. If `--archives` is also supplied, the explicit targets take precedence and `find` prints a notice that the archive filter was ignored. The `latest` target remains active-only.
+
+An explicit `--sessions-dir` remains a single custom rollout root. It does not automatically add Codex's archived-session directory; an explicitly supplied `--archives` option is ignored with a notice.
 
 Use `--search-in` for precise target selection. Values are comma-separated and may include `visible`, `metadata`, `tool-inputs`, `tool-outputs`, `tools`, and `all`:
 

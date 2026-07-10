@@ -10,6 +10,7 @@ from codex_sessions.sessions.index import SessionIndexEntry, normalize_session_i
 
 NO_ROLLOUT_FILE = "NO ROLLOUT FILE"
 NO_SESSION_INDEX_ENTRY = "NO ENTRY IN session_index.jsonl"
+ARCHIVED_SESSION = "ARCHIVED"
 
 SESSION_TIMESTAMP_STYLE = "bright_cyan"
 SESSION_TIMESTAMP_DETAIL_STYLE = "cyan"
@@ -29,6 +30,7 @@ class SessionDisplayInfo:
     relative_path: str | None = None
     status: str | None = None
     identity_status: str | None = None
+    archived: bool = False
 
     @property
     def identifier(self) -> str | None:
@@ -85,6 +87,8 @@ def format_session_display_info(info: SessionDisplayInfo) -> str:
         parts.append(info.identifier)
     if info.title:
         parts.append(info.title)
+    if info.archived:
+        parts.append(ARCHIVED_SESSION)
     if info.status:
         parts.append(info.status)
     if info.identity_status:
@@ -110,6 +114,7 @@ def indexed_session_display_info(
         ended_at=session_file.ended_at or entry.updated_at or session_file.modified_at,
         relative_path=session_file.relative_path,
         identity_status=session_file.identity_status,
+        archived=session_file.archived,
     )
 
 
@@ -126,6 +131,7 @@ def unindexed_session_display_info(
             relative_path=session_file.relative_path,
             status=NO_SESSION_INDEX_ENTRY,
             identity_status=session_file.identity_status,
+            archived=session_file.archived,
         )
     return SessionDisplayInfo(
         session_id=session_file.session_id,
@@ -135,6 +141,7 @@ def unindexed_session_display_info(
         relative_path=session_file.relative_path,
         status=NO_SESSION_INDEX_ENTRY,
         identity_status=session_file.identity_status,
+        archived=session_file.archived,
     )
 
 
@@ -264,6 +271,10 @@ def styled_session_display_text(
                 match_spans=title_matches,
             )
         )
+    if info.archived:
+        if rendered:
+            append_session_separator(rendered, encoding)
+        append_encoded(rendered, ARCHIVED_SESSION, encoding, style=SESSION_STATUS_STYLE)
     if info.status:
         if rendered:
             append_session_separator(rendered, encoding)

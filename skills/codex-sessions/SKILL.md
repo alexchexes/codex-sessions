@@ -11,6 +11,7 @@ Use this skill to inspect Codex session history without loading raw rollout JSON
 
 1. Resolve the target session:
    - If the user gives a rollout path, session ID, exact thread title, or `latest`, pass it directly to `codex-sessions`.
+   - Session IDs and exact titles can resolve archived sessions. `latest` intentionally considers active sessions only.
    - If the user gives a topic, partial ID, or partial title, use `codex-sessions find` first, then rerun conversion with a concrete session ID. Do not guess between multiple fuzzy matches.
 
 2. Prepare compact Markdown with the installed CLI:
@@ -59,9 +60,11 @@ codex-sessions find -i -r "regex|pattern"
 codex-sessions find --tools "shell command"
 codex-sessions find --metadata "repository-or-cwd"
 codex-sessions find --session <target> --search-in tool-inputs,tool-outputs "tool-or-needle"
+codex-sessions find --archives exclude "active-only needle"
+codex-sessions find --archives only "archived-only needle"
 ```
 
-`find` searches deserialized visible messages by default, highlights matches, groups results by session, and caches extracted text under `$CODEX_HOME/cache/codex-sessions/`. Use `--search-in` for precise targets: `visible`, `metadata`, `tool-inputs`, `tool-outputs`, `tools`, or `all`. For broad research, start with `find --all`, `--session`, `--line-width`, and `-m 0`, then render only the sessions that look relevant.
+`find` searches deserialized visible messages by default, highlights matches, groups results by session, and caches extracted text under `$CODEX_HOME/cache/codex-sessions/`. It includes archived sessions by default; archived results are labeled `ARCHIVED`. Use `--search-in` for precise targets: `visible`, `metadata`, `tool-inputs`, `tool-outputs`, `tools`, or `all`. For broad research, start with `find --all`, `--session`, `--line-width`, and `-m 0`, then render only the sessions that look relevant.
 
 Use raw `rg` only for narrow file-format checks, missing record types, exact raw event fields/order not exposed clearly by Markdown, or fields not covered by `find`.
 
@@ -71,7 +74,7 @@ If `list` or `find` shows `NO ENTRY IN session_index.jsonl`, inspect proposed in
 codex-sessions repair-index --dry-run
 ```
 
-Treat `FILENAME ID MISMATCH`, `INVALID RECORD-1...` as rollout-integrity warnings. Record-1 `session_meta.payload.id` is authoritative; `repair-index` skips rollouts without a canonical record-1 ID.
+Treat `FILENAME ID MISMATCH`, `INVALID RECORD-1...` as rollout-integrity warnings. Record-1 `session_meta.payload.id` is authoritative; `repair-index` skips rollouts without a canonical record-1 ID; also it skips archived sessions.
 
 Run `codex-sessions repair-index` only when the user wants to modify Codex state. It backs up `session_index.jsonl` and renames root `state_*.sqlite*` files so Codex rebuilds its state cache.
 
