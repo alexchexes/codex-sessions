@@ -189,7 +189,8 @@ class CliExportOutputTests(unittest.TestCase):
                     ]
                 )
             exported_path = export_dir / f"2026-04-30--Round-trip-index-title--{session_id}.jsonl"
-            with redirect_stdout(StringIO()):
+            import_output = StringIO()
+            with redirect_stdout(import_output):
                 import_result = main(
                     ["import", "--codex-home", str(target_home), str(exported_path)]
                 )
@@ -203,12 +204,12 @@ class CliExportOutputTests(unittest.TestCase):
             self.assertEqual(index_records[0]["thread_name"], "Round trip index title")
             self.assertEqual(target_records[1]["payload"]["thread_name"], "Round trip index title")
             self.assertEqual(target_records[2]["payload"]["content"], "Round-trip body")
-            self.assertFalse(state_db.exists())
+            self.assertIn("State database rebuild skipped.", import_output.getvalue())
+            self.assertTrue(state_db.exists())
             state_backups = tuple(
                 (target_home / "backups" / "codex-sessions").glob("*/state_5.sqlite")
             )
-            self.assertEqual(len(state_backups), 1)
-            self.assertEqual(state_backups[0].read_text(encoding="utf-8"), "state")
+            self.assertEqual(state_backups, ())
 
 
 if __name__ == "__main__":

@@ -6,7 +6,6 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -118,7 +117,12 @@ class CliImportMergeTests(unittest.TestCase):
             self.assertEqual(index_records[0]["thread_name"], "Incoming merge title")
             self.assertEqual(index_records[0]["updated_at"], "2026-04-30T18:22:39Z")
             self.assertEqual(index_records[0]["extra"], "preserved")
-            self.assertFalse(state_db.exists())
+            self.assertIn("State database rebuild skipped.", output)
+            self.assertTrue(state_db.exists())
+            self.assertEqual(
+                list(codex_home.glob("backups/codex-sessions/*/state_5.sqlite")),
+                [],
+            )
             self.assertEqual(len(rollout_backups), 1)
             self.assertEqual(read_jsonl(rollout_backups[0]), local_records)
 
@@ -305,7 +309,7 @@ class CliImportMergeTests(unittest.TestCase):
             self.assertIn("User: local branch message", output)
             self.assertIn("User: incoming branch message", output)
 
-    def test_import_merge_keeps_fast_forward_when_state_reset_is_deferred(self) -> None:
+    def test_import_merge_keeps_fast_forward_and_state_db_without_automatic_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             codex_home = root / "codex"
@@ -337,22 +341,24 @@ class CliImportMergeTests(unittest.TestCase):
                 import_user_message("incoming tail", "2026-04-30T18:22:39Z"),
             ]
             write_jsonl(source_path, incoming_records)
+            state_db = codex_home / "state_5.sqlite"
+            state_db.write_text("state", encoding="utf-8")
 
-            with patch(
-                "codex_sessions.sessions.transfer.reset_codex_state_cache",
-                side_effect=OSError("locked"),
-            ):
-                buffer = StringIO()
-                with redirect_stdout(buffer):
-                    result = main(
-                        ["import", "--merge", "--codex-home", str(codex_home), str(source_path)]
-                    )
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(
+                    ["import", "--merge", "--codex-home", str(codex_home), str(source_path)]
+                )
 
             output = buffer.getvalue()
             self.assertEqual(result, 0)
-            self.assertIn("State cache reset deferred:", output)
-            self.assertIn("\n  locked", output)
+            self.assertIn("State database rebuild skipped.", output)
             self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertTrue(state_db.exists())
+            self.assertEqual(
+                list(codex_home.glob("backups/codex-sessions/*/state_5.sqlite")),
+                [],
+            )
             self.assertEqual(read_jsonl(index_path)[0]["updated_at"], "2026-04-30T18:22:39Z")
             target_records = read_jsonl(target_path)
             self.assertEqual(target_records[0], incoming_records[0])

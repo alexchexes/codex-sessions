@@ -318,7 +318,7 @@ def parse_rename_args(
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog=f"{prog} rename",
-        description="Rename a session_index.jsonl entry and reset Codex state cache.",
+        description="Rename a Codex session without automatically rebuilding its state database.",
     )
     parser.add_argument("target", help="Session ID or exact current session title.")
     parser.add_argument("name", nargs="+", help="New session title.")
@@ -394,14 +394,24 @@ def add_state_cache_reset_control_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-reset-state-cache",
         action="store_true",
-        help=(
-            "Keep session changes without resetting Codex state cache. Run reset-state-cache later."
-        ),
+        help=("Do not offer an optional Codex state database rebuild after session changes."),
     )
     parser.add_argument(
         "--non-interactive",
         action="store_true",
-        help="Do not prompt to retry when automatic Codex state cache reset is blocked.",
+        help="Do not prompt after changes; never rebuild the Codex state database automatically.",
+    )
+    add_sqlite_home_arg(parser)
+
+
+def add_sqlite_home_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--sqlite-home",
+        type=Path,
+        help=(
+            "Codex SQLite home override. Otherwise use config.toml sqlite_home, "
+            "CODEX_SQLITE_HOME, then Codex home."
+        ),
     )
 
 
@@ -410,13 +420,19 @@ def parse_reset_state_cache_args(
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog=f"{prog} reset-state-cache",
-        description="Back up and reset Codex state cache files.",
+        description="Back up and rebuild Codex state database files (lossy recovery).",
     )
     parser.add_argument(
         "--codex-home",
         type=Path,
         default=default_codex_home(),
         help="Codex home directory. Defaults to CODEX_HOME or ~/.codex.",
+    )
+    add_sqlite_home_arg(parser)
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm that all Codex writers are closed and rebuild without prompting.",
     )
     return parser.parse_args(argv)
 
@@ -597,7 +613,7 @@ def parse_args(
             "  export     export sessions as rollout JSONL files\n\n"
             "  sync       synchronize sessions through a local folder\n\n"
             "  reset-state-cache\n"
-            "             back up and reset Codex state cache files\n\n"
+            "             back up and rebuild the Codex state database (lossy recovery)\n\n"
             "  install-skill\n"
             "             install or update the bundled Codex skill\n\n"
             "Markdown include presets:\n"

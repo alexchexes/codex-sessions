@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from codex_sessions.codex.state import StateCacheBackup, temp_path_for
+from codex_sessions.codex.state import temp_path_for
 from codex_sessions.core.json_streams import iter_jsonl_objects
 from codex_sessions.sessions.index import normalize_session_id
 
@@ -35,15 +35,6 @@ class ImportSessionPlan:
     source_fingerprint: FileFingerprint
     rollout_will_be_rewritten: bool
     replaces_existing_rollout: bool = False
-
-
-@dataclass(frozen=True)
-class ImportSessionResult:
-    plan: ImportSessionPlan
-    session_index_backup_path: Path | None
-    state_cache_backups: tuple[StateCacheBackup, ...]
-    state_cache_reset_error: str | None
-    state_cache_reset_skipped: bool
 
 
 @dataclass(frozen=True)
@@ -141,9 +132,6 @@ class ImportSessionsResult:
     plan: ImportSessionsPlan
     session_index_backup_path: Path | None
     rollout_backup_paths: tuple[Path, ...]
-    state_cache_backups: tuple[StateCacheBackup, ...]
-    state_cache_reset_error: str | None
-    state_cache_reset_skipped: bool
 
 
 @dataclass(frozen=True)

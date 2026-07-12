@@ -133,7 +133,7 @@ class CliRenameTests(unittest.TestCase):
             self.assertIn("invalid canonical session metadata", str(raised.exception))
             self.assertEqual(read_jsonl(index_path)[0]["thread_name"], "Original title")
 
-    def test_rename_updates_index_and_resets_state_cache(self) -> None:
+    def test_rename_updates_index_without_automatic_state_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
             session_id = "12121212-1212-1212-1212-121212121212"
@@ -180,13 +180,12 @@ class CliRenameTests(unittest.TestCase):
             self.assertIn("Old title", output)
             self.assertIn("To:", output)
             self.assertIn("New title", output)
-            self.assertIn("Backups:", output)
             self.assertIn("Index backup:", output)
-            self.assertIn("Backups:", output)
+            self.assertIn("State database rebuild skipped.", output)
             self.assertEqual(index_records[0]["thread_name"], "New title")
             self.assertEqual(index_records[0]["updated_at"], "2026-04-30T18:21:39Z")
             self.assertEqual(index_records[0]["extra"], "preserved")
-            self.assertFalse(state_db.exists())
+            self.assertTrue(state_db.exists())
             backup_dirs = sorted((codex_home / "backups" / "codex-sessions").iterdir())
             self.assertEqual(len(backup_dirs), 1)
             backup_dir = backup_dirs[0]
@@ -194,7 +193,7 @@ class CliRenameTests(unittest.TestCase):
                 (backup_dir / "session_index.jsonl").read_text(encoding="utf-8"),
                 original_index,
             )
-            self.assertEqual((backup_dir / "state_5.sqlite").read_text(encoding="utf-8"), "state")
+            self.assertFalse((backup_dir / "state_5.sqlite").exists())
             self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
             self.assertTrue(previous_backup.exists())
             self.assertEqual(previous_backup.read_text(encoding="utf-8"), "previous backup")
@@ -264,7 +263,8 @@ class CliRenameTests(unittest.TestCase):
                 (backup_dir / rollout_path.name).read_text(encoding="utf-8"),
                 original_rollout,
             )
-            self.assertEqual((backup_dir / "state_5.sqlite").read_text(encoding="utf-8"), "state")
+            self.assertTrue(state_db.exists())
+            self.assertFalse((backup_dir / "state_5.sqlite").exists())
 
     def test_rename_inserts_rollout_title_event_when_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -344,15 +344,54 @@ class CliRenameTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertEqual(index_records[0]["thread_name"], "New exact title")
 
-    def test_rename_keeps_index_when_state_reset_is_deferred(self) -> None:
+    def test_rename_non_tty_keeps_state_database_and_prints_explicit_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
             session_id = "14141414-1414-1414-1414-141414141414"
             index_path = codex_home / "session_index.jsonl"
             write_jsonl(index_path, [{"id": session_id, "thread_name": "Old title"}])
-            with patch(
-                "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
-                side_effect=OSError("locked"),
+            state_db = codex_home / "state_5.sqlite"
+            state_db.write_text("state", encoding="utf-8")
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(
+                    [
+                        "rename",
+                        "--codex-home",
+                        str(codex_home),
+                        session_id,
+                        "New title",
+                    ]
+                )
+
+            output = buffer.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("State database rebuild skipped.", output)
+            self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertEqual(read_jsonl(index_path)[0]["thread_name"], "New title")
+            self.assertEqual(state_db.read_text(encoding="utf-8"), "state")
+            self.assertEqual(
+                len(list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl"))),
+                1,
+            )
+
+    def test_rename_interactive_yes_rebuilds_state_database(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            session_id = "14141414-1515-1616-1717-181818181818"
+            write_jsonl(
+                codex_home / "session_index.jsonl",
+                [{"id": session_id, "thread_name": "Old title"}],
+            )
+            state_db = codex_home / "state_5.sqlite"
+            state_db.write_text("state", encoding="utf-8")
+
+            with (
+                patch(
+                    "codex_sessions.cli.can_prompt_state_cache_reset_interactively",
+                    return_value=True,
+                ),
+                patch("builtins.input", return_value="y"),
             ):
                 buffer = StringIO()
                 with redirect_stdout(buffer):
@@ -368,16 +407,16 @@ class CliRenameTests(unittest.TestCase):
 
             output = buffer.getvalue()
             self.assertEqual(result, 0)
-            self.assertIn("State cache reset deferred:", output)
-            self.assertIn("\n  locked", output)
-            self.assertIn("codex-sessions reset-state-cache", output)
-            self.assertEqual(read_jsonl(index_path)[0]["thread_name"], "New title")
+            self.assertIn("Optional Codex state database rebuild:", output)
+            self.assertIn("Rebuilding Codex state database...", output)
+            self.assertIn("State database rebuild OK.", output)
+            self.assertFalse(state_db.exists())
             self.assertEqual(
-                len(list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl"))),
+                len(list(codex_home.glob("backups/codex-sessions/*/state_5.sqlite"))),
                 1,
             )
 
-    def test_rename_interactive_state_reset_retry_reports_progress(self) -> None:
+    def test_rename_interactive_blank_defaults_to_no_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
             session_id = "14141414-1515-1616-1717-181818181818"
@@ -385,14 +424,12 @@ class CliRenameTests(unittest.TestCase):
                 codex_home / "session_index.jsonl",
                 [{"id": session_id, "thread_name": "Old title"}],
             )
+            state_db = codex_home / "state_5.sqlite"
+            state_db.write_text("state", encoding="utf-8")
 
             with (
                 patch(
-                    "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
-                    side_effect=OSError("locked"),
-                ),
-                patch(
-                    "codex_sessions.cli.can_retry_state_cache_reset_interactively",
+                    "codex_sessions.cli.can_prompt_state_cache_reset_interactively",
                     return_value=True,
                 ),
                 patch("builtins.input", return_value=""),
@@ -411,11 +448,13 @@ class CliRenameTests(unittest.TestCase):
 
             output = buffer.getvalue()
             self.assertEqual(result, 0)
-            self.assertIn("State cache reset deferred:", output)
-            self.assertIn("Retrying state cache reset...", output)
-            self.assertIn("State cache reset OK.", output)
+            self.assertIn("Optional Codex state database rebuild:", output)
+            self.assertIn("State database rebuild skipped.", output)
+            self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertNotIn("Rebuilding Codex state database...", output)
+            self.assertEqual(state_db.read_text(encoding="utf-8"), "state")
 
-    def test_rename_interactive_state_reset_prompt_can_skip_retry(self) -> None:
+    def test_rename_no_reset_flag_suppresses_interactive_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
             session_id = "14141414-1515-1616-1717-181818181818"
@@ -426,14 +465,10 @@ class CliRenameTests(unittest.TestCase):
 
             with (
                 patch(
-                    "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
-                    side_effect=OSError("locked"),
-                ),
-                patch(
-                    "codex_sessions.cli.can_retry_state_cache_reset_interactively",
+                    "codex_sessions.cli.can_prompt_state_cache_reset_interactively",
                     return_value=True,
                 ),
-                patch("builtins.input", return_value="n"),
+                patch("builtins.input") as prompt,
             ):
                 buffer = StringIO()
                 with redirect_stdout(buffer):
@@ -442,6 +477,7 @@ class CliRenameTests(unittest.TestCase):
                             "rename",
                             "--codex-home",
                             str(codex_home),
+                            "--no-reset-state-cache",
                             session_id,
                             "New title",
                         ]
@@ -449,46 +485,7 @@ class CliRenameTests(unittest.TestCase):
 
             output = buffer.getvalue()
             self.assertEqual(result, 0)
-            self.assertIn("State cache reset deferred:", output)
-            self.assertIn("State cache reset skipped.", output)
+            self.assertIn("State database rebuild skipped.", output)
             self.assertIn("codex-sessions reset-state-cache", output)
-            self.assertNotIn("Retrying state cache reset...", output)
-
-    def test_rename_interactive_state_reset_ctrl_c_skips_retry(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            codex_home = Path(tmpdir)
-            session_id = "14141414-1515-1616-1717-181818181818"
-            write_jsonl(
-                codex_home / "session_index.jsonl",
-                [{"id": session_id, "thread_name": "Old title"}],
-            )
-
-            with (
-                patch(
-                    "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
-                    side_effect=OSError("locked"),
-                ),
-                patch(
-                    "codex_sessions.cli.can_retry_state_cache_reset_interactively",
-                    return_value=True,
-                ),
-                patch("builtins.input", side_effect=KeyboardInterrupt),
-            ):
-                buffer = StringIO()
-                with redirect_stdout(buffer):
-                    result = main(
-                        [
-                            "rename",
-                            "--codex-home",
-                            str(codex_home),
-                            session_id,
-                            "New title",
-                        ]
-                    )
-
-            output = buffer.getvalue()
-            self.assertEqual(result, 0)
-            self.assertIn("State cache reset deferred:", output)
-            self.assertIn("State cache reset skipped.", output)
-            self.assertIn("codex-sessions reset-state-cache", output)
-            self.assertNotIn("Retrying state cache reset...", output)
+            self.assertNotIn("Optional Codex state database rebuild:", output)
+            prompt.assert_not_called()

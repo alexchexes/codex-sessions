@@ -6,7 +6,6 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -142,7 +141,10 @@ class CliIndexTests(unittest.TestCase):
             self.assertIn(f"{missing_id} - Repair the missing index entry.", output)
             self.assertIn("2026/04/30/rollout-2026-04-30T18-21-39-", output)
             self.assertIn("updated_at: 2026-04-30T18:21:39+00:00", output)
-            self.assertIn("State cache reset required after repair.", output)
+            self.assertIn(
+                "State database rebuild after repair: optional (interactive default: no).",
+                output,
+            )
             self.assertNotIn(indexed_id, output)
 
     def test_repair_index_prefers_thread_name_updated_title_from_rollout(self) -> None:
@@ -220,9 +222,9 @@ class CliIndexTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertIn("Missing session_index.jsonl entries: 0", output)
             self.assertIn("No missing session_index.jsonl entries found.", output)
-            self.assertNotIn("State cache reset required", output)
+            self.assertNotIn("State database rebuild after repair", output)
 
-    def test_repair_index_adds_entries_and_resets_state_cache(self) -> None:
+    def test_repair_index_adds_entries_without_automatic_state_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
             sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
@@ -267,12 +269,12 @@ class CliIndexTests(unittest.TestCase):
             self.assertIn("Added session_index.jsonl entries: 1", output)
             self.assertIn("Backups:", output)
             self.assertIn("Index:", output)
-            self.assertIn("Backups:", output)
+            self.assertIn("State database rebuild skipped.", output)
             self.assertEqual(index_records[-1]["id"], missing_id)
             self.assertEqual(index_records[-1]["thread_name"], "Repair the real index entry.")
             self.assertEqual(index_records[-1]["updated_at"], "2026-04-30T18:21:39Z")
-            self.assertFalse(state_db.exists())
-            self.assertFalse(state_wal.exists())
+            self.assertTrue(state_db.exists())
+            self.assertTrue(state_wal.exists())
             self.assertTrue(logs_db.exists())
             backup_dirs = sorted((codex_home / "backups" / "codex-sessions").iterdir())
             self.assertEqual(len(backup_dirs), 1)
@@ -281,15 +283,12 @@ class CliIndexTests(unittest.TestCase):
                 (backup_dir / "session_index.jsonl").read_text(encoding="utf-8"),
                 original_index,
             )
-            self.assertEqual((backup_dir / "state_5.sqlite").read_text(encoding="utf-8"), "state")
-            self.assertEqual(
-                (backup_dir / "state_5.sqlite-wal").read_text(encoding="utf-8"),
-                "wal",
-            )
+            self.assertFalse((backup_dir / "state_5.sqlite").exists())
+            self.assertFalse((backup_dir / "state_5.sqlite-wal").exists())
             self.assertEqual(list(codex_home.glob("state_5.sqlite.backup-*")), [])
             self.assertEqual(list(codex_home.glob("session_index.jsonl.backup-*")), [])
 
-    def test_repair_index_keeps_index_when_state_reset_is_deferred(self) -> None:
+    def test_repair_index_keeps_index_and_state_db_when_rebuild_is_not_offered(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = Path(tmpdir)
             sessions_day = codex_home / "sessions" / "2026" / "04" / "30"
@@ -312,20 +311,29 @@ class CliIndexTests(unittest.TestCase):
                     }
                 ],
             )
+            state_db = codex_home / "state_5.sqlite"
+            state_db.write_text("state", encoding="utf-8")
 
-            with patch(
-                "codex_sessions.sessions.index_workflows.reset_codex_state_cache",
-                side_effect=OSError("locked"),
-            ):
-                buffer = StringIO()
-                with redirect_stdout(buffer):
-                    result = main(["repair-index", "--codex-home", str(codex_home)])
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(
+                    [
+                        "repair-index",
+                        "--no-reset-state-cache",
+                        "--codex-home",
+                        str(codex_home),
+                    ]
+                )
 
             output = buffer.getvalue()
             self.assertEqual(result, 0)
-            self.assertIn("State cache reset deferred:", output)
-            self.assertIn("\n  locked", output)
+            self.assertIn("State database rebuild skipped.", output)
             self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertTrue(state_db.exists())
+            self.assertEqual(
+                list(codex_home.glob("backups/codex-sessions/*/state_5.sqlite")),
+                [],
+            )
             self.assertEqual(read_jsonl(index_path)[-1]["id"], missing_id)
             self.assertEqual(
                 len(list(codex_home.glob("backups/codex-sessions/*/session_index.jsonl"))),

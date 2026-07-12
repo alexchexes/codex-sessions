@@ -5,13 +5,11 @@ from typing import Any
 
 from codex_sessions.codex.state import (
     CodexStateError,
-    StateCacheBackup,
     backup_dir_for,
     backup_file,
     backup_label,
     backup_session_index,
     remove_backup_dir_if_empty,
-    reset_codex_state_cache,
     restore_file_backup,
     restore_session_index_backup,
 )
@@ -69,9 +67,6 @@ class RepairIndexResult:
     warnings: tuple[str, ...]
     skipped_without_id: int
     session_index_backup_path: Path | None
-    state_cache_backups: tuple[StateCacheBackup, ...]
-    state_cache_reset_error: str | None
-    state_cache_reset_skipped: bool
 
 
 @dataclass(frozen=True)
@@ -86,9 +81,6 @@ class RenameSessionResult:
     rollout_thread_name: str | None
     changed: bool
     session_index_backup_path: Path | None
-    state_cache_backups: tuple[StateCacheBackup, ...]
-    state_cache_reset_error: str | None
-    state_cache_reset_skipped: bool
 
 
 def list_session_lines(
@@ -281,8 +273,6 @@ def rename_session_index_entry(
     session_index_path: Path | None,
     target: str,
     new_thread_name: str,
-    *,
-    reset_state_cache: bool = True,
 ) -> RenameSessionResult:
     normalized_new_thread_name = new_thread_name.strip()
     if not normalized_new_thread_name:
@@ -320,9 +310,6 @@ def rename_session_index_entry(
             rollout_thread_name=rollout_thread_name,
             changed=False,
             session_index_backup_path=None,
-            state_cache_backups=(),
-            state_cache_reset_error=None,
-            state_cache_reset_skipped=False,
         )
 
     updated_records = list(records)
@@ -361,15 +348,6 @@ def rename_session_index_entry(
             f"{exc} Rolled back Codex session files. Close all Codex sessions and retry."
         ) from exc
 
-    state_cache_backups: tuple[StateCacheBackup, ...] = ()
-    state_cache_reset_error = None
-    if reset_state_cache:
-        try:
-            state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
-        except (CodexStateError, OSError) as exc:
-            state_cache_reset_error = str(exc)
-            remove_backup_dir_if_empty(backup_dir)
-
     return RenameSessionResult(
         session_id=session_id,
         old_thread_name=old_thread_name,
@@ -381,9 +359,6 @@ def rename_session_index_entry(
         rollout_thread_name=rollout_thread_name,
         changed=True,
         session_index_backup_path=index_backup_path,
-        state_cache_backups=state_cache_backups,
-        state_cache_reset_error=state_cache_reset_error,
-        state_cache_reset_skipped=not reset_state_cache,
     )
 
 
@@ -394,7 +369,6 @@ def repair_session_index(
     *,
     use_cache: bool = True,
     rebuild_cache: bool = False,
-    reset_state_cache: bool = True,
 ) -> RepairIndexResult:
     index_path = session_index_path or codex_home / "session_index.jsonl"
     candidates, warnings, skipped_without_id = missing_session_index_candidates(
@@ -410,9 +384,6 @@ def repair_session_index(
             warnings=tuple(warnings),
             skipped_without_id=skipped_without_id,
             session_index_backup_path=None,
-            state_cache_backups=(),
-            state_cache_reset_error=None,
-            state_cache_reset_skipped=False,
         )
 
     label = backup_label()
@@ -432,21 +403,9 @@ def repair_session_index(
             f"{exc} Rolled back session_index.jsonl. Close all Codex sessions and retry."
         ) from exc
 
-    state_cache_backups: tuple[StateCacheBackup, ...] = ()
-    state_cache_reset_error = None
-    if reset_state_cache:
-        try:
-            state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
-        except (CodexStateError, OSError) as exc:
-            state_cache_reset_error = str(exc)
-            remove_backup_dir_if_empty(backup_dir)
-
     return RepairIndexResult(
         candidates=tuple(candidates),
         warnings=tuple(warnings),
         skipped_without_id=skipped_without_id,
         session_index_backup_path=index_backup_path,
-        state_cache_backups=state_cache_backups,
-        state_cache_reset_error=state_cache_reset_error,
-        state_cache_reset_skipped=not reset_state_cache,
     )

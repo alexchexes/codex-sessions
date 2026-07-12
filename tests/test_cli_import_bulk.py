@@ -139,10 +139,11 @@ class CliImportBulkTests(unittest.TestCase):
             self.assertIn("Sessions added: 1", output)
             self.assertIn("Skipped (identical): 1", output)
             self.assertIn("ID conflicts: 1", output)
+            self.assertIn("State database rebuild skipped.", output)
             self.assertTrue(imported_path.exists())
             self.assertEqual(index_records[0]["id"], new_id)
-            self.assertFalse(state_db.exists())
-            self.assertEqual(len(state_backups), 1)
+            self.assertTrue(state_db.exists())
+            self.assertEqual(len(state_backups), 0)
 
     def test_import_directory_reports_duplicates_without_importing_duplicate_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

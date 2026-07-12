@@ -76,7 +76,11 @@ codex-sessions repair-index --dry-run
 
 Treat `FILENAME ID MISMATCH`, `INVALID RECORD-1...` as rollout-integrity warnings. Record-1 `session_meta.payload.id` is authoritative; `repair-index` skips rollouts without a canonical record-1 ID; also it skips archived sessions.
 
-Run `codex-sessions repair-index` only when the user wants to modify Codex state. It backs up `session_index.jsonl` and renames root `state_*.sqlite*` files so Codex rebuilds its state cache.
+Run `codex-sessions repair-index` only when the user wants to modify Codex state. It backs up `session_index.jsonl` and appends the missing entries without rebuilding Codex's state database automatically.
+
+`repair-index`, `rename`, `import`, and `sync` offer an optional state database rebuild after a successful local mutation only in an interactive terminal. The prompt confirms that all Codex writers are closed and defaults to no; `--non-interactive` and `--no-reset-state-cache` skip the offer.
+
+Treat `codex-sessions reset-state-cache` as explicit, lossy recovery. It resolves the live database directory from `--sqlite-home`, Codex `config.toml`, `CODEX_SQLITE_HOME`, or Codex home; backs up and moves aside its `state_*.sqlite*` family; and can lose DB-only state such as agent jobs, closed subagent status, and exact archive times. Run it only with all Codex writers closed. It asks for confirmation interactively and requires `--yes` when non-interactive. A compatible-prefix cross-device import or sync fast-forward does not require a rebuild for conversation context, although SQLite list metadata can remain stale until the next real turn. Normal filesystem-backed Codex thread listing can discover newly copied rollouts without a rebuild; a state-only client view may need a filesystem-backed listing or restart.
 
 ## Direct Paths
 

@@ -12,7 +12,7 @@ from codex_sessions.sessions.transfer import (
     existing_index_record_for_id,
     import_target_path,
     session_index_record_for_import_plan,
-    session_index_records_for_import,
+    session_index_records_for_import_plans,
 )
 
 SESSION_ID = "019de863-c167-7942-9e39-9a3291b9bf55"
@@ -147,7 +147,7 @@ class SessionTransferTests(unittest.TestCase):
                 },
             )
 
-    def test_session_index_records_for_import_updates_only_matching_record(self) -> None:
+    def test_session_index_records_for_import_plans_updates_only_matching_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             index_path = Path(tmpdir) / "session_index.jsonl"
             index_path.write_text(
@@ -171,7 +171,7 @@ class SessionTransferTests(unittest.TestCase):
                 rollout_will_be_rewritten=False,
             )
 
-            records = session_index_records_for_import(plan)
+            records = session_index_records_for_import_plans((plan,))
 
             self.assertEqual(records[0]["thread_name"], "Other")
             self.assertEqual(records[1]["thread_name"], "Updated")

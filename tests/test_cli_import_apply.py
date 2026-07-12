@@ -6,7 +6,6 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -98,7 +97,7 @@ class CliImportApplyTests(unittest.TestCase):
             self.assertFalse(target_path.exists())
             self.assertFalse((codex_home / "session_index.jsonl").exists())
 
-    def test_import_bare_rollout_adds_index_copies_rollout_and_resets_state_cache(self) -> None:
+    def test_import_single_rollout_adds_index_without_automatic_state_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             codex_home = root / "codex"
@@ -138,12 +137,11 @@ class CliImportApplyTests(unittest.TestCase):
             output = buffer.getvalue()
             target_path = codex_home / "sessions" / "2026" / "04" / "30" / source_path.name
             index_records = read_jsonl(codex_home / "session_index.jsonl")
-            backup_dirs = sorted((codex_home / "backups" / "codex-sessions").iterdir())
             self.assertEqual(result, 0)
             self.assertIn("Imported session:", output)
             self.assertIn(f"{session_id} - Imported title", output)
             self.assertIn("Index action: add session_index.jsonl entry", output)
-            self.assertIn("Backups:", output)
+            self.assertIn("State database rebuild skipped.", output)
             self.assertEqual(
                 target_path.read_text(encoding="utf-8"), source_path.read_text(encoding="utf-8")
             )
@@ -157,10 +155,10 @@ class CliImportApplyTests(unittest.TestCase):
                     }
                 ],
             )
-            self.assertFalse(state_db.exists())
-            self.assertEqual(len(backup_dirs), 1)
+            self.assertTrue(state_db.exists())
             self.assertEqual(
-                (backup_dirs[0] / "state_5.sqlite").read_text(encoding="utf-8"), "state"
+                list(codex_home.glob("backups/codex-sessions/*/state_5.sqlite")),
+                [],
             )
 
     def test_import_can_skip_state_cache_reset_for_scripted_follow_up(self) -> None:
@@ -203,7 +201,7 @@ class CliImportApplyTests(unittest.TestCase):
 
             output = buffer.getvalue()
             self.assertEqual(result, 0)
-            self.assertIn("State cache reset skipped.", output)
+            self.assertIn("State database rebuild skipped.", output)
             self.assertIn("codex-sessions reset-state-cache", output)
             self.assertTrue(state_db.exists())
             self.assertEqual(
@@ -332,7 +330,7 @@ class CliImportApplyTests(unittest.TestCase):
                 index_records, [{"id": session_id, "thread_name": "Existing index title"}]
             )
 
-    def test_import_keeps_index_and_target_rollout_when_state_reset_is_deferred(self) -> None:
+    def test_import_keeps_index_target_and_state_db_without_automatic_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             codex_home = root / "codex"
@@ -358,20 +356,22 @@ class CliImportApplyTests(unittest.TestCase):
                 ],
             )
             target_path = codex_home / "sessions" / "2026" / "04" / "30" / source_path.name
+            state_db = codex_home / "state_5.sqlite"
+            state_db.write_text("state", encoding="utf-8")
 
-            with patch(
-                "codex_sessions.sessions.transfer.reset_codex_state_cache",
-                side_effect=OSError("locked"),
-            ):
-                buffer = StringIO()
-                with redirect_stdout(buffer):
-                    result = main(["import", "--codex-home", str(codex_home), str(source_path)])
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                result = main(["import", "--codex-home", str(codex_home), str(source_path)])
 
             output = buffer.getvalue()
             self.assertEqual(result, 0)
-            self.assertIn("State cache reset deferred:", output)
-            self.assertIn("\n  locked", output)
+            self.assertIn("State database rebuild skipped.", output)
             self.assertIn("codex-sessions reset-state-cache", output)
+            self.assertTrue(state_db.exists())
+            self.assertEqual(
+                list(codex_home.glob("backups/codex-sessions/*/state_5.sqlite")),
+                [],
+            )
             self.assertEqual(read_jsonl(index_path)[-1]["id"], session_id)
             self.assertTrue(target_path.exists())
             self.assertEqual(

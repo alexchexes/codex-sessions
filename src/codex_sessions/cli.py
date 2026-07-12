@@ -30,6 +30,7 @@ from codex_sessions.codex.state import (
     CodexStateError,
     StateCacheBackup,
     reset_codex_state_cache_with_backup,
+    resolve_codex_sqlite_home,
 )
 from codex_sessions.core.terminal import encode_for_output, terminal_console
 from codex_sessions.errors import CliError
@@ -420,9 +421,9 @@ def print_path_backup_block(
 
 
 def print_state_cache_backups(backups: tuple[StateCacheBackup, ...]) -> None:
-    print_cli_line("State cache reset OK.", style=STYLE_SUCCESS)
+    print_cli_line("State database rebuild OK.", style=STYLE_SUCCESS)
     if not backups:
-        print_cli_line("No Codex state cache files found.", style=STYLE_SECONDARY)
+        print_cli_line("No Codex state database files found.", style=STYLE_SECONDARY)
         return
     print_cli_line("  Backups:", style=STYLE_HEADING)
     for backup in backups:
@@ -430,92 +431,152 @@ def print_state_cache_backups(backups: tuple[StateCacheBackup, ...]) -> None:
         print_cli_line(f"    -> {backup.backup_path}", style=STYLE_SECONDARY)
 
 
-def print_deferred_state_cache_command() -> None:
+def print_deferred_state_cache_command(codex_home: Path, sqlite_home: Path | None = None) -> None:
     print_cli_line(
-        "State cache reset skipped. To reset, run this with all Codex sessions closed:",
+        (
+            "State database rebuild skipped. To rebuild later, run this with all Codex "
+            "writers closed:"
+        ),
         style=STYLE_ATTENTION,
     )
-    print_cli_line("  codex-sessions reset-state-cache")
+    command = f'  codex-sessions reset-state-cache --codex-home "{codex_home}"'
+    if sqlite_home is not None:
+        command += f' --sqlite-home "{sqlite_home}"'
+    print_cli_line(command)
 
 
-def can_retry_state_cache_reset_interactively(non_interactive: bool) -> bool:
+def can_prompt_state_cache_reset_interactively(non_interactive: bool) -> bool:
     """Only prompt when both streams are attached to a terminal."""
     return not non_interactive and sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def prompt_retry_state_cache_reset() -> bool:
+def prompt_state_database_rebuild(question: str = "Rebuild now? [y/N] ") -> bool:
     while True:
         try:
-            answer = input("Retry state cache reset now? [Y/n] ")
+            answer = input(question)
         except (EOFError, KeyboardInterrupt):
             print_cli_line()
             return False
         normalized = answer.strip().lower()
-        if normalized in ("", "y", "yes"):
+        if normalized in ("y", "yes"):
             return True
-        if normalized in ("n", "no"):
+        if normalized in ("", "n", "no"):
             return False
         print_cli_line("Please answer y or n.", style=STYLE_ATTENTION)
 
 
-def retry_state_cache_reset_interactively(codex_home: Path) -> None:
+def retry_state_cache_reset_interactively(
+    codex_home: Path,
+    sqlite_home: Path,
+) -> None:
     while True:
         print_cli_line()
         print_cli_line(
             (
-                "Close all Codex sessions and retry. Or skip and run "
+                "Close all Codex writers and retry. Or skip and run "
                 "'codex-sessions reset-state-cache' later."
             ),
             style=STYLE_ATTENTION,
         )
-        if not prompt_retry_state_cache_reset():
-            print_deferred_state_cache_command()
+        if not prompt_state_database_rebuild(
+            "All Codex writers are closed; retry state database rebuild now? [y/N] "
+        ):
+            print_deferred_state_cache_command(codex_home, sqlite_home)
             return
         print_cli_line()
-        print_cli_line("Retrying state cache reset...", style=STYLE_LABEL)
+        print_cli_line("Retrying state database rebuild...", style=STYLE_LABEL)
         print_cli_line()
         try:
-            backups = reset_codex_state_cache_with_backup(codex_home)
+            backups = reset_codex_state_cache_with_backup(sqlite_home, backup_home=codex_home)
         except (CodexStateError, OSError) as exc:
-            print_cli_line("State cache reset still blocked:", style=STYLE_ATTENTION)
+            print_cli_line("State database rebuild still blocked:", style=STYLE_ATTENTION)
             print_cli_lines(indented_text_lines(str(exc)), style=STYLE_SECONDARY)
             continue
         print_state_cache_backups(backups)
         return
 
 
-def print_mutation_state_cache_status(
+def offer_state_database_rebuild(
     codex_home: Path,
-    backups: tuple[StateCacheBackup, ...],
-    reset_error: str | None,
-    reset_skipped: bool,
     *,
+    sqlite_home_override: Path | None,
     non_interactive: bool,
+    offer_reset: bool,
 ) -> None:
-    """Print the follow-up needed after changing rollout or index files."""
+    """Offer an explicitly lossy rebuild after changing rollout or index files."""
     print_cli_line()
-    if reset_skipped:
-        print_deferred_state_cache_command()
+    try:
+        sqlite_home = resolve_codex_sqlite_home(codex_home, sqlite_home_override)
+    except CodexStateError as exc:
+        print_cli_line("Could not resolve Codex SQLite home:", style=STYLE_ATTENTION)
+        print_cli_lines(indented_text_lines(str(exc)), style=STYLE_SECONDARY)
+        print_deferred_state_cache_command(codex_home, sqlite_home_override)
         return
-    if reset_error is not None:
-        print_cli_line("State cache reset deferred:", style=STYLE_ATTENTION)
-        print_cli_lines(indented_text_lines(reset_error), style=STYLE_SECONDARY)
-        if can_retry_state_cache_reset_interactively(non_interactive):
-            retry_state_cache_reset_interactively(codex_home)
-        else:
-            print_cli_line(
-                "To reset later, run this with all Codex sessions closed:",
-                style=STYLE_ATTENTION,
-            )
-            print_cli_line("  codex-sessions reset-state-cache")
+    if not offer_reset or not can_prompt_state_cache_reset_interactively(non_interactive):
+        print_deferred_state_cache_command(codex_home, sqlite_home)
         return
-    print_state_cache_backups(backups)
+    print_cli_line(
+        "Optional Codex state database rebuild:",
+        style=STYLE_ATTENTION,
+    )
+    print_cli_line(
+        (
+            "  A rebuild can lose DB-only state, including agent jobs, closed "
+            "subagent status, and exact archive times."
+        ),
+        style=STYLE_SECONDARY,
+    )
+    print_labeled_text_lines(
+        [("SQLite home", sqlite_home, STYLE_SECONDARY)],
+        indent="  ",
+    )
+    print_cli_line(
+        "  Close every Codex writer first; open SQLite files can be moved on some systems.",
+        style=STYLE_ATTENTION,
+    )
+    if not prompt_state_database_rebuild("All Codex writers are closed; rebuild now? [y/N] "):
+        print_deferred_state_cache_command(codex_home, sqlite_home)
+        return
+    print_cli_line()
+    print_cli_line("Rebuilding Codex state database...", style=STYLE_LABEL)
+    print_cli_line()
+    try:
+        prompted_backups = reset_codex_state_cache_with_backup(sqlite_home, backup_home=codex_home)
+    except (CodexStateError, OSError) as exc:
+        print_cli_line("State database rebuild blocked:", style=STYLE_ATTENTION)
+        print_cli_lines(indented_text_lines(str(exc)), style=STYLE_SECONDARY)
+        retry_state_cache_reset_interactively(codex_home, sqlite_home)
+        return
+    print_state_cache_backups(prompted_backups)
 
 
 def run_reset_state_cache_command(args: argparse.Namespace) -> int:
     codex_home = args.codex_home.expanduser().resolve()
     try:
-        backups = reset_codex_state_cache_with_backup(codex_home)
+        sqlite_home = resolve_codex_sqlite_home(codex_home, args.sqlite_home)
+    except CodexStateError as exc:
+        raise SystemExit(str(exc)) from exc
+    print_labeled_text_lines(
+        [
+            ("Codex home", codex_home, STYLE_SECONDARY),
+            ("SQLite home", sqlite_home, STYLE_SECONDARY),
+        ]
+    )
+    if not args.yes:
+        if not can_prompt_state_cache_reset_interactively(False):
+            raise SystemExit(
+                "Refusing to rebuild without confirmation. Close all Codex writers and rerun "
+                "with --yes."
+            )
+        print_cli_line(
+            "Close every Codex writer first; open SQLite files can be moved on some systems.",
+            style=STYLE_ATTENTION,
+        )
+        if not prompt_state_database_rebuild("All Codex writers are closed; rebuild now? [y/N] "):
+            print_deferred_state_cache_command(codex_home, sqlite_home)
+            return 0
+    try:
+        backups = reset_codex_state_cache_with_backup(sqlite_home, backup_home=codex_home)
     except (CodexStateError, OSError) as exc:
         raise SystemExit(str(exc)) from exc
     print_state_cache_backups(backups)
@@ -592,7 +653,10 @@ def run_repair_index_command(args: argparse.Namespace) -> int:
             print_cli_line("Would add:", style=STYLE_HEADING)
             for candidate in candidates:
                 print_cli_line(repair_index_candidate_text(candidate, indent="  "))
-            print_cli_line("State cache reset required after repair.", style=STYLE_ATTENTION)
+            print_cli_line(
+                "State database rebuild after repair: optional (interactive default: no).",
+                style=STYLE_ATTENTION,
+            )
         else:
             print_cli_line("No missing session_index.jsonl entries found.")
         if skipped_without_id:
@@ -609,7 +673,6 @@ def run_repair_index_command(args: argparse.Namespace) -> int:
             sessions_dir=sessions_dir,
             use_cache=not args.no_cache,
             rebuild_cache=args.rebuild_cache,
-            reset_state_cache=not args.no_reset_state_cache,
         )
     except (CliError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
@@ -629,12 +692,11 @@ def run_repair_index_command(args: argparse.Namespace) -> int:
         if result.session_index_backup_path is not None:
             print_cli_line()
             print_path_backup_block(result.session_index_backup_path)
-        print_mutation_state_cache_status(
+        offer_state_database_rebuild(
             codex_home,
-            result.state_cache_backups,
-            result.state_cache_reset_error,
-            result.state_cache_reset_skipped,
+            sqlite_home_override=args.sqlite_home,
             non_interactive=args.non_interactive,
+            offer_reset=not args.no_reset_state_cache,
         )
     else:
         print_cli_line("No missing session_index.jsonl entries found.")
@@ -661,7 +723,6 @@ def run_rename_command(args: argparse.Namespace) -> int:
             session_index_path=session_index_path,
             target=args.target,
             new_thread_name=new_thread_name,
-            reset_state_cache=not args.no_reset_state_cache,
         )
     except (CliError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
@@ -704,12 +765,11 @@ def run_rename_command(args: argparse.Namespace) -> int:
     if result.session_index_backup_path is not None:
         rename_lines.append(("Index backup", result.session_index_backup_path, STYLE_SECONDARY))
     print_labeled_text_lines(rename_lines, indent="  ")
-    print_mutation_state_cache_status(
+    offer_state_database_rebuild(
         codex_home,
-        result.state_cache_backups,
-        result.state_cache_reset_error,
-        result.state_cache_reset_skipped,
+        sqlite_home_override=args.sqlite_home,
         non_interactive=args.non_interactive,
+        offer_reset=not args.no_reset_state_cache,
     )
     return 0
 
@@ -765,7 +825,10 @@ def format_import_plan_lines(plan: ImportSessionPlan) -> list[CliLine]:
                 indent="  ",
             ),
             "",
-            cli_text("State cache reset required after import.", style=STYLE_ATTENTION),
+            cli_text(
+                "State database rebuild after import: optional (interactive default: no).",
+                style=STYLE_ATTENTION,
+            ),
         ]
     )
     return lines
@@ -1060,7 +1123,12 @@ def format_import_sessions_plan_lines(
                 )
             )
             lines.append(path_arrow_text(import_plan.target_path))
-        lines.append(cli_text("State cache reset required after import.", style=STYLE_ATTENTION))
+        lines.append(
+            cli_text(
+                "State database rebuild after import: optional (interactive default: no).",
+                style=STYLE_ATTENTION,
+            )
+        )
     if plan.fast_forward_plans:
         lines.append(cli_text("Would fast-forward sessions:", style=STYLE_HEADING))
         for import_plan in plan.fast_forward_plans:
@@ -1078,7 +1146,10 @@ def format_import_sessions_plan_lines(
             )
             lines.append(path_arrow_text(import_plan.target_path))
         lines.append(
-            cli_text("State cache reset required after fast-forward.", style=STYLE_ATTENTION)
+            cli_text(
+                "State database rebuild after fast-forward: optional (interactive default: no).",
+                style=STYLE_ATTENTION,
+            )
         )
     if plan.skipped:
         lines.append(cli_text("Skipped (identical) sessions:", style=STYLE_NEUTRAL_HEADING))
@@ -1530,19 +1601,17 @@ def run_import_command(args: argparse.Namespace) -> int:
             sessions_dir=sessions_dir,
             name=args.name,
             merge=args.merge,
-            reset_state_cache=not args.no_reset_state_cache,
         )
     except (CliError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 
     print_import_sessions_result(result, show_divergence=args.show_divergence)
     if result.plan.import_plans or result.plan.fast_forward_plans:
-        print_mutation_state_cache_status(
+        offer_state_database_rebuild(
             codex_home,
-            result.state_cache_backups,
-            result.state_cache_reset_error,
-            result.state_cache_reset_skipped,
+            sqlite_home_override=args.sqlite_home,
             non_interactive=args.non_interactive,
+            offer_reset=not args.no_reset_state_cache,
         )
     return 1 if import_plan_has_errors(result.plan) else 0
 
@@ -1565,6 +1634,8 @@ def print_sync_sessions_result(
     *,
     show_divergence: bool = False,
     non_interactive: bool = False,
+    offer_state_cache_reset: bool = True,
+    sqlite_home_override: Path | None = None,
 ) -> None:
     print_cli_line("Sync folder:", style=STYLE_HEADING)
     print_encoded_lines(path_block_lines("Path", result.plan.sync_dir, indent="  "))
@@ -1591,12 +1662,11 @@ def print_sync_sessions_result(
     print_cli_line("Upload to sync folder:", style=STYLE_HEADING)
     print_sync_export_result(result.plan.export_plan)
     if should_print_state_cache_status and result.import_result is not None:
-        print_mutation_state_cache_status(
+        offer_state_database_rebuild(
             codex_home,
-            result.import_result.state_cache_backups,
-            result.import_result.state_cache_reset_error,
-            result.import_result.state_cache_reset_skipped,
+            sqlite_home_override=sqlite_home_override,
             non_interactive=non_interactive,
+            offer_reset=offer_state_cache_reset,
         )
 
 
@@ -1631,7 +1701,6 @@ def run_sync_command(args: argparse.Namespace) -> int:
             codex_home=codex_home,
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
-            reset_state_cache=not args.no_reset_state_cache,
         )
     except (CliError, ValueError, OSError) as exc:
         raise SystemExit(str(exc)) from exc
@@ -1641,6 +1710,8 @@ def run_sync_command(args: argparse.Namespace) -> int:
         codex_home,
         show_divergence=args.show_divergence,
         non_interactive=args.non_interactive,
+        offer_state_cache_reset=not args.no_reset_state_cache,
+        sqlite_home_override=args.sqlite_home,
     )
     return (
         1

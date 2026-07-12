@@ -10,7 +10,8 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
-  "rich>=14.1"
+  "rich>=14.1",
+  "tomli>=2.0; python_version < '3.11'"
 ]
 authors = [
   { name = "Alex" }

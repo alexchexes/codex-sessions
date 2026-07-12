@@ -11,13 +11,11 @@ from typing import Any
 
 from codex_sessions.codex.state import (
     CodexStateError,
-    StateCacheBackup,
     backup_dir_for,
     backup_file,
     backup_label,
     backup_session_index,
     remove_backup_dir_if_empty,
-    reset_codex_state_cache,
     restore_file_backup,
     restore_session_index_backup,
     temp_path_for,
@@ -80,7 +78,6 @@ from codex_sessions.sessions.rollout import (
     ImportDuplicateSession,
     ImportFailure,
     ImportSessionPlan,
-    ImportSessionResult,
     ImportSessionSide,
     ImportSessionsPlan,
     ImportSessionsResult,
@@ -663,13 +660,6 @@ def session_index_record_for_import_plan(plan: ImportSessionPlan) -> dict[str, s
     }
 
 
-def session_index_records_for_import(plan: ImportSessionPlan) -> list[Any]:
-    records = (
-        session_index_records(plan.session_index_path) if plan.session_index_path.exists() else []
-    )
-    return apply_import_plan_to_session_index_records(records, plan)
-
-
 def apply_import_plan_to_session_index_records(
     records: Sequence[Any], plan: ImportSessionPlan
 ) -> list[Any]:
@@ -704,77 +694,6 @@ def copy_or_rewrite_import_rollout(plan: ImportSessionPlan) -> None:
         write_rollout_records(plan.target_path, records)
         return
     shutil.copy2(plan.source_path, plan.target_path)
-
-
-def import_bare_rollout(
-    source_path: Path,
-    codex_home: Path,
-    session_index_path: Path | None = None,
-    sessions_dir: Path | None = None,
-    *,
-    name: str | None = None,
-    reset_state_cache: bool = True,
-) -> ImportSessionResult:
-    local_fingerprint_cache = load_local_fingerprint_cache(codex_home)
-    plan = plan_bare_rollout_import(
-        source_path=source_path,
-        codex_home=codex_home,
-        session_index_path=session_index_path,
-        sessions_dir=sessions_dir,
-        name=name,
-        local_fingerprint_cache=local_fingerprint_cache,
-    )
-    write_local_fingerprint_cache(local_fingerprint_cache)
-    index_changed = plan.index_action in {"add", "update"}
-    updated_index_records = session_index_records_for_import(plan) if index_changed else None
-
-    label = backup_label()
-    backup_dir = backup_dir_for(codex_home, label)
-    index_backup_path = (
-        backup_session_index(plan.session_index_path, backup_dir) if index_changed else None
-    )
-    rollout_written = False
-    attempted_rollout_path = False
-    try:
-        if index_changed:
-            if updated_index_records is None:
-                raise CliError("Could not prepare session_index.jsonl update.")
-            plan.session_index_path.parent.mkdir(parents=True, exist_ok=True)
-            write_session_index_records(plan.session_index_path, updated_index_records)
-        attempted_rollout_path = True
-        copy_or_rewrite_import_rollout(plan)
-        rollout_written = True
-    except (CliError, CodexStateError, OSError) as exc:
-        try:
-            if rollout_written or attempted_rollout_path:
-                restore_file_backup(plan.target_path, None)
-            if index_changed:
-                restore_session_index_backup(plan.session_index_path, index_backup_path)
-            remove_backup_dir_if_empty(backup_dir)
-        except OSError as restore_exc:
-            raise CliError(
-                f"{exc} Also failed to restore Codex session files from backup: {restore_exc}"
-            ) from restore_exc
-        raise CliError(
-            f"{exc} Rolled back imported Codex session files. Close all Codex sessions and retry."
-        ) from exc
-
-    state_cache_backups: tuple[StateCacheBackup, ...] = ()
-    state_cache_reset_error = None
-    if reset_state_cache:
-        try:
-            state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
-        except (CodexStateError, OSError) as exc:
-            state_cache_reset_error = str(exc)
-            remove_backup_dir_if_empty(backup_dir)
-
-    return ImportSessionResult(
-        plan=plan,
-        session_index_backup_path=index_backup_path,
-        state_cache_backups=state_cache_backups,
-        state_cache_reset_error=state_cache_reset_error,
-        state_cache_reset_skipped=not reset_state_cache,
-    )
 
 
 def zip_member_output_path(temp_dir: Path, index: int, member_name: str) -> Path:
@@ -1178,11 +1097,9 @@ def session_index_records_for_import_plans(plans: Sequence[ImportSessionPlan]) -
 def import_session_plans(
     plans: Sequence[ImportSessionPlan],
     codex_home: Path,
-    *,
-    reset_state_cache: bool = True,
-) -> tuple[Path | None, tuple[Path, ...], tuple[StateCacheBackup, ...], str | None]:
+) -> tuple[Path | None, tuple[Path, ...]]:
     if not plans:
-        return None, (), (), None
+        return None, ()
 
     index_path = plans[0].session_index_path
     index_changed = any(plan.index_action in {"add", "update", "advance"} for plan in plans)
@@ -1221,20 +1138,9 @@ def import_session_plans(
             f"{exc} Rolled back imported Codex session files. Close all Codex sessions and retry."
         ) from exc
 
-    state_cache_backups: tuple[StateCacheBackup, ...] = ()
-    state_cache_reset_error = None
-    if reset_state_cache:
-        try:
-            state_cache_backups = reset_codex_state_cache(codex_home, backup_dir)
-        except (CodexStateError, OSError) as exc:
-            state_cache_reset_error = str(exc)
-            remove_backup_dir_if_empty(backup_dir)
-
     return (
         index_backup_path,
         tuple(backup for backup in rollout_backups.values() if backup is not None),
-        state_cache_backups,
-        state_cache_reset_error,
     )
 
 
@@ -1246,7 +1152,6 @@ def import_sessions(
     *,
     name: str | None = None,
     merge: bool = False,
-    reset_state_cache: bool = True,
 ) -> ImportSessionsResult:
     with import_rollout_source_bundle(source_path) as source_bundle:
         document_cache: dict[Path, SearchDocument] = {}
@@ -1268,23 +1173,14 @@ def import_sessions(
                 plan=plan,
                 session_index_backup_path=None,
                 rollout_backup_paths=(),
-                state_cache_backups=(),
-                state_cache_reset_error=None,
-                state_cache_reset_skipped=False,
             )
-        (
-            session_index_backup_path,
-            rollout_backup_paths,
-            state_cache_backups,
-            state_cache_reset_error,
-        ) = import_session_plans(selected_plans, codex_home, reset_state_cache=reset_state_cache)
+        session_index_backup_path, rollout_backup_paths = import_session_plans(
+            selected_plans, codex_home
+        )
         return ImportSessionsResult(
             plan=plan,
             session_index_backup_path=session_index_backup_path,
             rollout_backup_paths=rollout_backup_paths,
-            state_cache_backups=state_cache_backups,
-            state_cache_reset_error=state_cache_reset_error,
-            state_cache_reset_skipped=not reset_state_cache,
         )
 
 
@@ -2190,8 +2086,6 @@ def sync_sessions(
     codex_home: Path,
     session_index_path: Path | None = None,
     sessions_dir: Path | None = None,
-    *,
-    reset_state_cache: bool = True,
 ) -> SyncSessionsResult:
     plan = plan_sessions_sync(
         sync_dir=sync_dir,
@@ -2208,16 +2102,12 @@ def sync_sessions(
             session_index_path=session_index_path,
             sessions_dir=sessions_dir,
             merge=True,
-            reset_state_cache=reset_state_cache,
         )
     else:
         import_result = ImportSessionsResult(
             plan=plan.import_plan,
             session_index_backup_path=None,
             rollout_backup_paths=(),
-            state_cache_backups=(),
-            state_cache_reset_error=None,
-            state_cache_reset_skipped=False,
         )
 
     if plan.export_plan.session_plans:
