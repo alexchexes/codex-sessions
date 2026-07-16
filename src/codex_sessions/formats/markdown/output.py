@@ -50,6 +50,7 @@ class MarkdownOptions:
     tool_duration_threshold_seconds: float = DEFAULT_TOOL_DURATION_THRESHOLD_SECONDS
     include_timing_markers: bool = True
     tool_include: frozenset[str] | None = None
+    include_reasoning: bool = False
 
 
 @dataclass(frozen=True)
@@ -331,12 +332,13 @@ def convert_jsonl_to_markdown(input_path: Path, output_path: Path, options: Mark
                         write_dialogue(dst, "User", text, record_timestamp)
                         handled = True
                 elif payload_type == "reasoning":
-                    write_section(
-                        dst,
-                        "Codex",
-                        render_reasoning(payload, options.redaction, image_handler),
-                        record_timestamp,
-                    )
+                    if options.include_reasoning:
+                        write_section(
+                            dst,
+                            "Codex",
+                            render_reasoning(payload, options.redaction, image_handler),
+                            record_timestamp,
+                        )
                     handled = True
                 elif payload_type in TOOL_CALL_PAYLOAD_TYPES:
                     call_id = payload.get("call_id")

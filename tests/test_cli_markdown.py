@@ -139,6 +139,71 @@ class CliMarkdownTests(unittest.TestCase):
     def test_include_modifiers(self) -> None:
         self.assertEqual(parse_markdown_include("default,-tools"), set())
         self.assertEqual(parse_markdown_include("dialogue,+metadata"), {"metadata"})
+        self.assertEqual(parse_markdown_include("dialogue,+reasoning"), {"reasoning"})
+        self.assertNotIn("reasoning", parse_markdown_include("default"))
+        self.assertIn("reasoning", parse_markdown_include("full"))
+        self.assertNotIn("reasoning", parse_markdown_include("full,-reasoning"))
+
+    def test_markdown_reasoning_is_opt_in_and_never_falls_through_to_raw(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            without_reasoning_path = Path(tmpdir) / "without-reasoning.md"
+            with_reasoning_path = Path(tmpdir) / "with-reasoning.md"
+            write_jsonl(
+                input_path,
+                [
+                    import_user_message("visible message", "2026-04-26T00:00:00Z"),
+                    {
+                        "timestamp": "2026-04-26T00:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "reasoning",
+                            "content": [{"type": "input_text", "text": "readable reasoning"}],
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-26T00:00:02Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "reasoning",
+                            "encrypted_content": "secret",
+                        },
+                    },
+                ],
+            )
+
+            convert_jsonl_to_markdown(
+                input_path,
+                without_reasoning_path,
+                MarkdownOptions(
+                    tool_mode="none",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=True,
+                    redaction="...",
+                    include_reasoning=False,
+                ),
+            )
+            convert_jsonl_to_markdown(
+                input_path,
+                with_reasoning_path,
+                MarkdownOptions(
+                    tool_mode="none",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=False,
+                    redaction="...",
+                    include_reasoning=True,
+                ),
+            )
+
+            without_reasoning = without_reasoning_path.read_text(encoding="utf-8")
+            with_reasoning = with_reasoning_path.read_text(encoding="utf-8")
+            self.assertIn("visible message", without_reasoning)
+            self.assertNotIn("readable reasoning", without_reasoning)
+            self.assertNotIn("encrypted_content", without_reasoning)
+            self.assertIn("readable reasoning", with_reasoning)
+            self.assertIn("**Reasoning (encrypted_content) ...**", with_reasoning)
 
     def test_parse_duration_arg_seconds_accepts_common_units(self) -> None:
         self.assertEqual(parse_duration_arg_seconds("0"), 0)

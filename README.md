@@ -165,18 +165,23 @@ codex-sessions <ID-or-title-or-path> -o path/for/output.md
 `--md-include` controls broad optional sections:
 
 ```bash
-# Visible user/Codex messages, reasoning, and progress messages.
+# Visible user/Codex messages and progress messages only.
 codex-sessions <ID-or-title-or-path> --md --md-include dialogue
 
 # Default: dialogue plus concise tool call previews.
 codex-sessions <ID-or-title-or-path> --md --md-include default
 
+# Add reasoning records explicitly.
+codex-sessions <ID-or-title-or-path> --md --md-include dialogue,+reasoning
+
 # Add metadata tables such as turn_context and token_count.
 codex-sessions <ID-or-title-or-path> --md --md-include metadata
 
-# Metadata plus raw unhandled records.
+# Metadata plus reasoning and raw unhandled records.
 codex-sessions <ID-or-title-or-path> --md --md-include full
 ```
+
+Both `dialogue` and `default` omit reasoning records. Add `+reasoning` when reasoning summaries or encrypted-reasoning placeholders are useful; `full` includes reasoning automatically.
 
 `--md-tools` controls tool call/output detail:
 
@@ -454,7 +459,7 @@ Codex usually detects skill changes automatically. If the skill does not appear,
 
 ## Notes
 
-- Encrypted reasoning payloads are redacted by default as `...` and rendered compactly in Markdown.
+- When reasoning is included, encrypted reasoning payloads are redacted by default as `...` and rendered compactly in Markdown.
 - Markdown metadata tables escape pipe characters and replace embedded newlines with `<br>`.
 - The tool uses Rich for colored terminal output.
 

@@ -12,7 +12,7 @@ from codex_sessions.formats.markdown.timing import (
 from codex_sessions.formats.markdown.tools import DEFAULT_TOOL_PREVIEW_CHARS
 from codex_sessions.sessions.files import ARCHIVE_SCOPES
 
-MARKDOWN_FEATURES = {"tools", "metadata", "raw"}
+MARKDOWN_FEATURES = {"tools", "reasoning", "metadata", "raw"}
 MARKDOWN_TOOL_MODES = {"auto", "none", "names", "smart", "preview", "full"}
 MARKDOWN_IMAGE_MODES = {"truncate", "extract", "inline"}
 MARKDOWN_DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m|h)?$", re.IGNORECASE)
@@ -46,7 +46,7 @@ MARKDOWN_PRESETS = {
     "default": {"tools"},
     "tools": {"tools"},
     "metadata": {"tools", "metadata"},
-    "full": {"tools", "metadata", "raw"},
+    "full": {"tools", "reasoning", "metadata", "raw"},
 }
 DEFAULT_CLI_PROG = "codex-sessions"
 CLI_PROG_ALIASES = {DEFAULT_CLI_PROG}
@@ -61,6 +61,7 @@ MARKDOWN_INCLUDE_ALIASES = {
     "tool_calls": "tools",
     "meta": "metadata",
     "metadata": "metadata",
+    "reasoning": "reasoning",
     "raw": "raw",
     "unhandled": "raw",
 }
@@ -641,10 +642,10 @@ def parse_args(
             "  install-skill\n"
             "             install or update the bundled Codex skill\n\n"
             "Markdown include presets:\n"
-            "  dialogue   visible user/Codex messages, reasoning, progress messages\n"
+            "  dialogue   visible user/Codex messages and progress messages\n"
             "  default    dialogue plus tool calls and tool outputs\n"
             "  metadata   default plus metadata tables such as turn_context/token_count\n"
-            "  full       metadata plus raw blocks for unhandled records\n\n"
+            "  full       metadata plus reasoning and raw blocks for unhandled records\n\n"
             "Markdown tool detail modes:\n"
             "  auto       smart when tools are included by --md-include, otherwise none\n"
             "  none       omit tool call/output sections\n"
@@ -659,6 +660,7 @@ def parse_args(
             "The --md-include value can also use modifiers, for example:\n"
             "  default,-tools\n"
             "  dialogue,+metadata\n"
+            "  dialogue,+reasoning\n"
             "  full,-raw\n\n"
             "Explicit --md-tools values override the tools setting from --md-include.\n"
             "--md-tool-include filters enabled tools and does not enable them itself.\n"

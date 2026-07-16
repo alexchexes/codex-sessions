@@ -1990,6 +1990,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     tool_preview_chars=args.md_tool_preview_chars,
                     include_metadata="metadata" in markdown_features,
                     include_raw="raw" in markdown_features,
+                    include_reasoning="reasoning" in markdown_features,
                     redaction=args.redact_encrypted,
                     image_mode=args.md_images,
                     timestamps=args.timestamps,
