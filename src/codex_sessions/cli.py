@@ -24,6 +24,7 @@ from codex_sessions.cli_args import (
     parse_search_args,
     parse_search_targets,
     parse_sync_args,
+    parse_tool_includes,
     resolve_markdown_tool_mode,
 )
 from codex_sessions.codex.state import (
@@ -183,6 +184,10 @@ def run_search_command(args: argparse.Namespace) -> int:
         raise SystemExit("--max-lines-per-session must be zero or greater")
     if args.search_in and (args.metadata or args.tools or args.all):
         raise SystemExit("--search-in cannot be combined with --metadata, --tools, or --all")
+    try:
+        tool_include = parse_tool_includes(args.tool_include, "--tool-include")
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     if args.search_in:
         try:
@@ -224,6 +229,7 @@ def run_search_command(args: argparse.Namespace) -> int:
         include_tool_inputs=include_tool_inputs,
         include_tool_outputs=include_tool_outputs,
         include_titles=include_titles,
+        tool_include=tool_include,
     )
 
     try:
@@ -1947,6 +1953,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     codex_home = args.codex_home.expanduser().resolve()
     try:
         markdown_features = parse_markdown_include(args.md_include)
+        tool_include = parse_tool_includes(args.md_tool_include, "--md-tool-include")
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     if args.md_tool_preview_chars < 1:
@@ -1988,6 +1995,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     timestamps=args.timestamps,
                     gap_threshold_seconds=args.gap_threshold,
                     tool_duration_threshold_seconds=args.tool_duration_threshold,
+                    tool_include=tool_include,
                 ),
             )
         except ValueError as exc:

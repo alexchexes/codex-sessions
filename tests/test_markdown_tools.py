@@ -7,6 +7,7 @@ from codex_sessions.formats.markdown.tools import (
     render_tool_call,
     render_tool_output,
     tool_display_name,
+    tool_name_is_included,
     truncate_preview,
 )
 
@@ -32,6 +33,16 @@ class MarkdownToolsTests(unittest.TestCase):
             "functions.shell_command",
         )
 
+    def test_tool_name_include_supports_exact_names_and_case_sensitive_globs(self) -> None:
+        full_name = "mcp__ask_human.ask_human"
+
+        self.assertTrue(tool_name_is_included(full_name, None))
+        self.assertTrue(tool_name_is_included(full_name, frozenset({full_name})))
+        self.assertTrue(tool_name_is_included(full_name, frozenset({"*ask_human*"})))
+        self.assertTrue(tool_name_is_included(full_name, frozenset({"mcp__ask_*.ask_?????"})))
+        self.assertFalse(tool_name_is_included(full_name, frozenset({"ask_human"})))
+        self.assertFalse(tool_name_is_included(full_name, frozenset({"*ASK_HUMAN*"})))
+
     def test_truncate_preview_reports_omitted_character_count(self) -> None:
         self.assertEqual(truncate_preview("abc", 10), "abc")
         self.assertEqual(
@@ -51,6 +62,17 @@ class MarkdownToolsTests(unittest.TestCase):
         self.assertIn("echo hello", "\n".join(rendered))
         self.assertIn("Workdir: `D:/repo`", rendered)
         self.assertIn("Timeout ms: `1000`", rendered)
+
+    def test_render_smart_tool_call_preview_extracts_ask_human_input(self) -> None:
+        rendered = render_smart_tool_call_preview(
+            "mcp__ask_human.ask_human",
+            '{"question":"Continue?","context":"A decision is needed."}',
+            80,
+        )
+
+        assert rendered is not None
+        self.assertIn("Question: `Continue?`", rendered)
+        self.assertIn("Context: `A decision is needed.`", rendered)
 
     def test_render_smart_tool_call_preview_returns_none_for_unknown_shape(self) -> None:
         self.assertIsNone(render_smart_tool_call_preview("future_tool", "plain", 80))

@@ -11,8 +11,8 @@ from codex_sessions.sessions.cache import (
 )
 from codex_sessions.sessions.documents import SearchDocument
 
-SEARCH_CACHE_VERSION = 6
-SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v6.json"
+SEARCH_CACHE_VERSION = 7
+SEARCH_CACHE_RELATIVE_PATH = Path("cache") / "codex-sessions" / "search-v7.json"
 
 
 def search_cache_path(codex_home: Path) -> Path:

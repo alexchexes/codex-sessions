@@ -193,11 +193,16 @@ codex-sessions <ID-or-title-or-path> --md --md-tools preview
 # Tune preview length.
 codex-sessions <ID-or-title-or-path> --md --md-tools preview --md-tool-preview-chars 1200
 
+# Full arguments and outputs, limited to a specific tool calls.
+codex-sessions <ID-or-title-or-path> --md --md-tools full --md-tool-include '*ask_human*'
+
 # Hide tools entirely.
 codex-sessions <ID-or-title-or-path> --md --md-tools none
 ```
 
 The default `--md-tools auto` follows `--md-include`: presets that include tools render smart tool call previews, and presets without tools omit them. Explicit `--md-tools` values override that behavior. Smart mode keeps tool outputs to names and call IDs.
+
+`--md-tool-include` accepts case-sensitive shell-style glob patterns and may be repeated or given a comma-separated list. Values without glob characters match exact tool display names. Quote patterns to prevent the shell from expanding them. The option narrows the tool calls that would otherwise be rendered; it does not enable tool rendering itself. Consequently, `--md-include dialogue --md-tool-include '*ask_human*'` still omits tools, while adding `--md-tools full` explicitly enables matching tools. The shorter canonical form above relies on the default Markdown preset, which already enables tools.
 
 ##### Timing annotations
 
@@ -387,10 +392,14 @@ Use `--search-in` for precise target selection. Values are comma-separated and m
 ```bash
 codex-sessions find --search-in tool-outputs "Traceback"
 codex-sessions find --search-in tool-inputs,tool-outputs "mcp__ask_human.ask_human"
+codex-sessions find --search-in visible,tool-inputs,tool-outputs \
+  --tool-include '*ask_human*' "decision text"
 codex-sessions find --search-in metadata "copy-as-markdown"
 ```
 
 `--search-in` cannot be combined with `--metadata`, `--tools`, or `--all`. Tool input/output search uses concise cached previews rather than full raw payloads, so cached search stays lightweight.
+
+`--tool-include` limits tool input/output matches using the same case-sensitive shell-style glob patterns while leaving other selected targets, such as `visible`, unchanged. Values without glob characters remain exact matches. It accepts repeated options or a comma-separated list and does not enable tool search by itself. Ask-human input previews include the `question` and `context`, and its output preview is searchable as usual.
 
 `grep` is an alias for `find`:
 

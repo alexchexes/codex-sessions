@@ -50,6 +50,79 @@ def import_user_message(content: str, timestamp: str) -> dict[str, Any]:
 
 
 class CliMarkdownToolTests(unittest.TestCase):
+    def test_markdown_tool_include_keeps_dialogue_and_only_matching_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rollout.jsonl"
+            output_path = Path(tmpdir) / "rollout.md"
+            write_jsonl(
+                input_path,
+                [
+                    import_user_message("visible dialogue", "2026-04-26T00:00:00Z"),
+                    {
+                        "timestamp": "2026-04-26T00:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "namespace": "mcp__ask_human",
+                            "name": "ask_human",
+                            "arguments": '{"question":"Continue?"}',
+                            "call_id": "ask_1",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-26T00:00:02Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "ask_1",
+                            "output": "Yes",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-26T00:00:03Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "shell_command",
+                            "arguments": '{"command":"echo hidden"}',
+                            "call_id": "shell_1",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-04-26T00:00:04Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "shell_1",
+                            "output": "hidden output",
+                        },
+                    },
+                ],
+            )
+
+            convert_jsonl_to_markdown(
+                input_path,
+                output_path,
+                MarkdownOptions(
+                    tool_mode="full",
+                    tool_preview_chars=80,
+                    include_metadata=False,
+                    include_raw=False,
+                    redaction="...",
+                    tool_include=frozenset({"*ask_human*"}),
+                ),
+            )
+
+            output = output_path.read_text(encoding="utf-8")
+            self.assertIn("visible dialogue", output)
+            self.assertIn("**Tool call:** `mcp__ask_human.ask_human`", output)
+            self.assertIn('"question": "Continue?"', output)
+            self.assertIn("**Tool output:** `mcp__ask_human.ask_human`", output)
+            self.assertIn("Yes", output)
+            self.assertNotIn("shell_command", output)
+            self.assertNotIn("echo hidden", output)
+            self.assertNotIn("hidden output", output)
+
     def test_markdown_names_mode_omits_tool_payloads(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "rollout.jsonl"

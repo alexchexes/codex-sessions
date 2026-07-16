@@ -100,6 +100,16 @@ class SessionSearchTests(unittest.TestCase):
             search_document_lines(
                 document,
                 search_options(
+                    include_tools=True,
+                    tool_include=frozenset({"mcp__ask_human.ask_human"}),
+                ),
+            ),
+            ["User: needle"],
+        )
+        self.assertEqual(
+            search_document_lines(
+                document,
+                search_options(
                     include_visible=False,
                     include_tool_outputs=True,
                     include_titles=False,
@@ -107,6 +117,40 @@ class SessionSearchTests(unittest.TestCase):
             ),
             [
                 "Tool output: shell_command: output needle",
+            ],
+        )
+
+    def test_search_document_lines_filters_tools_without_filtering_dialogue(self) -> None:
+        document = SearchDocument(
+            session_id="id",
+            thread_name=None,
+            started_at=None,
+            ended_at=None,
+            last_activity_at=None,
+            visible_lines=("User: dialogue needle",),
+            metadata_lines=(),
+            tool_input_lines=(
+                "Tool call: mcp__ask_human.ask_human: Question: `input needle`",
+                "Tool call: shell_command: echo needle",
+            ),
+            tool_output_lines=(
+                "Tool output: mcp__ask_human.ask_human: output needle",
+                "Tool output: shell_command: output needle",
+            ),
+        )
+
+        self.assertEqual(
+            search_document_lines(
+                document,
+                search_options(
+                    include_tools=True,
+                    tool_include=frozenset({"*ask_human*"}),
+                ),
+            ),
+            [
+                "User: dialogue needle",
+                "Tool call: mcp__ask_human.ask_human: Question: `input needle`",
+                "Tool output: mcp__ask_human.ask_human: output needle",
             ],
         )
 
@@ -120,6 +164,26 @@ class SessionSearchTests(unittest.TestCase):
         )
 
         self.assertEqual(lines, ["Tool call: shell_command: echo needle"])
+
+    def test_render_tool_call_search_lines_extracts_ask_human_input(self) -> None:
+        lines = render_tool_call_search_lines(
+            {
+                "type": "function_call",
+                "namespace": "mcp__ask_human",
+                "name": "ask_human",
+                "arguments": json.dumps(
+                    {"question": "needle question", "context": "needle context"}
+                ),
+            }
+        )
+
+        self.assertEqual(
+            lines,
+            [
+                "Tool call: mcp__ask_human.ask_human: Question: `needle question`",
+                "Tool call: mcp__ask_human.ask_human: Context: `needle context`",
+            ],
+        )
 
     def test_render_tool_output_search_lines_uses_call_name_mapping(self) -> None:
         lines = render_tool_output_search_lines(

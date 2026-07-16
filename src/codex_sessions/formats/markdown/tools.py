@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterable
+from fnmatch import fnmatchcase
 from typing import Any
 
 from codex_sessions.formats.markdown.formatting import (
@@ -42,6 +43,16 @@ def tool_display_name(payload: dict[str, Any]) -> str:
     name = payload.get("name") or call_type
     namespace = payload.get("namespace")
     return f"{namespace}.{name}" if namespace else name
+
+
+def tool_name_is_included(full_name: str, include_patterns: frozenset[str] | None) -> bool:
+    if include_patterns is None or full_name in include_patterns:
+        return True
+    return any(
+        fnmatchcase(full_name, pattern)
+        for pattern in include_patterns
+        if any(character in pattern for character in "*?[")
+    )
 
 
 def append_tool_identity(lines: list[str], payload: dict[str, Any]) -> None:
@@ -174,6 +185,7 @@ def render_smart_tool_call_preview(
         return lines or None
 
     if short_name in {
+        "ask_human",
         "request_user_input",
         "asking_user_missing_context",
     }:
@@ -383,13 +395,7 @@ def render_tool_output(
     image_handler: MarkdownImageHandler | None = None,
     duration_seconds: float | None = None,
 ) -> str:
-    call_type = payload.get("type", "tool_output")
-    call_id = payload.get("call_id")
-    tool_name = (
-        tool_names_by_call_id.get(call_id, call_type)
-        if isinstance(call_id, str) and call_id
-        else call_type
-    )
+    tool_name = tool_output_display_name(payload, tool_names_by_call_id)
     lines = [f"**Tool output:** `{tool_name}`"]
     append_tool_identity(lines, payload)
     if duration_seconds is not None:
@@ -421,3 +427,14 @@ def render_tool_output(
     else:
         lines.extend(["", fenced_block(body, language)])
     return "\n".join(lines)
+
+
+def tool_output_display_name(payload: dict[str, Any], tool_names_by_call_id: dict[str, str]) -> str:
+    raw_call_type = payload.get("type")
+    call_type = raw_call_type if isinstance(raw_call_type, str) and raw_call_type else "tool_output"
+    call_id = payload.get("call_id")
+    return (
+        tool_names_by_call_id.get(call_id, call_type)
+        if isinstance(call_id, str) and call_id
+        else call_type
+    )

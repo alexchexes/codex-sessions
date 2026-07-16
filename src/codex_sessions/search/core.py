@@ -23,6 +23,7 @@ class SearchOptions:
     include_tool_inputs: bool = False
     include_tool_outputs: bool = False
     include_titles: bool = True
+    tool_include: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)

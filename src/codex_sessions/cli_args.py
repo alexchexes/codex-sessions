@@ -203,6 +203,16 @@ def parse_search_args(
         ),
     )
     parser.add_argument(
+        "--tool-include",
+        action="append",
+        metavar="PATTERN",
+        help=(
+            "Search only tools whose display names match this case-sensitive shell-style "
+            "pattern. Comma-separated values and repeated options are supported. Does not "
+            "enable tool search."
+        ),
+    )
+    parser.add_argument(
         "--session",
         action="append",
         default=[],
@@ -269,6 +279,20 @@ def parse_search_targets(specs: Sequence[str]) -> set[str]:
     if not targets:
         raise ValueError("--search-in must include at least one target")
     return targets
+
+
+def parse_tool_includes(specs: Sequence[str] | None, option_name: str) -> frozenset[str] | None:
+    if not specs:
+        return None
+
+    names: set[str] = set()
+    for spec in specs:
+        for raw_name in spec.split(","):
+            name = raw_name.strip()
+            if not name:
+                raise ValueError(f"{option_name} names must not be empty")
+            names.add(name)
+    return frozenset(names)
 
 
 def parse_repair_index_args(
@@ -637,6 +661,7 @@ def parse_args(
             "  dialogue,+metadata\n"
             "  full,-raw\n\n"
             "Explicit --md-tools values override the tools setting from --md-include.\n"
+            "--md-tool-include filters enabled tools and does not enable them itself.\n"
         ),
     )
     parser.add_argument(
@@ -695,6 +720,16 @@ def parse_args(
         help=(
             "Maximum characters per tool argument/output preview when "
             "--md-tools=preview. Default: %(default)s."
+        ),
+    )
+    parser.add_argument(
+        "--md-tool-include",
+        action="append",
+        metavar="PATTERN",
+        help=(
+            "Render only tools whose display names match this case-sensitive shell-style "
+            "pattern. Comma-separated values and repeated options are supported. Does not "
+            "enable tool rendering."
         ),
     )
     parser.add_argument(

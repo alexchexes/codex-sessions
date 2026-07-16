@@ -11,6 +11,7 @@ from codex_sessions.formats.markdown.tools import (
     parse_json_object_maybe,
     render_smart_tool_call_preview,
     tool_display_name,
+    tool_name_is_included,
     truncate_preview,
 )
 from codex_sessions.search.cache import (
@@ -111,23 +112,35 @@ def session_search_lines(input_path: Path, options: SearchOptions) -> list[str]:
 def search_document_lines(document: SearchDocument, options: SearchOptions) -> list[str]:
     lines: list[str] = []
     seen_lines = set()
-    line_groups = []
+    line_groups: list[tuple[tuple[str, ...], bool]] = []
     if options.include_visible:
-        line_groups.append(document.visible_lines)
+        line_groups.append((document.visible_lines, False))
     if options.include_metadata:
-        line_groups.append(document.metadata_lines)
+        line_groups.append((document.metadata_lines, False))
     if options.include_tools or options.include_tool_inputs:
-        line_groups.append(document.tool_input_lines)
+        line_groups.append((document.tool_input_lines, True))
     if options.include_tools or options.include_tool_outputs:
-        line_groups.append(document.tool_output_lines)
+        line_groups.append((document.tool_output_lines, True))
 
-    for group in line_groups:
+    for group, is_tool_group in line_groups:
         for line in group:
+            if is_tool_group and not search_tool_line_is_included(line, options.tool_include):
+                continue
             # Search output is a quick index, so repeated identical rollout lines add noise.
             if line and line not in seen_lines:
                 seen_lines.add(line)
                 lines.append(line)
     return lines
+
+
+def search_tool_line_is_included(line: str, tool_include: frozenset[str] | None) -> bool:
+    if tool_include is None:
+        return True
+    for prefix in ("Tool call: ", "Tool output: "):
+        if line.startswith(prefix):
+            tool_name = line[len(prefix) :].split(": ", 1)[0]
+            return tool_name_is_included(tool_name, tool_include)
+    return False
 
 
 def build_search_document(input_path: Path, redaction: str) -> SearchDocument:

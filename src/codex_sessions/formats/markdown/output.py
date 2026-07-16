@@ -19,7 +19,13 @@ from codex_sessions.formats.markdown.timing import (
     format_duration,
     format_markdown_timestamp,
 )
-from codex_sessions.formats.markdown.tools import render_tool_call, render_tool_output
+from codex_sessions.formats.markdown.tools import (
+    render_tool_call,
+    render_tool_output,
+    tool_display_name,
+    tool_name_is_included,
+    tool_output_display_name,
+)
 from codex_sessions.sessions.documents import sanitize
 from codex_sessions.sessions.message_content import is_injected_user_context
 
@@ -43,6 +49,7 @@ class MarkdownOptions:
     gap_threshold_seconds: float = DEFAULT_GAP_THRESHOLD_SECONDS
     tool_duration_threshold_seconds: float = DEFAULT_TOOL_DURATION_THRESHOLD_SECONDS
     include_timing_markers: bool = True
+    tool_include: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -333,21 +340,27 @@ def convert_jsonl_to_markdown(input_path: Path, output_path: Path, options: Mark
                     handled = True
                 elif payload_type in TOOL_CALL_PAYLOAD_TYPES:
                     call_id = payload.get("call_id")
+                    tool_name = tool_display_name(payload)
                     if isinstance(call_id, str) and call_id and record_timestamp is not None:
                         tool_started_at_by_call_id[call_id] = record_timestamp
-                    if options.tool_mode != "none":
-                        rendered_tool_call, tool_name = render_tool_call(
+                    if isinstance(call_id, str) and call_id:
+                        tool_names_by_call_id[call_id] = tool_name
+                    if options.tool_mode != "none" and tool_name_is_included(
+                        tool_name, options.tool_include
+                    ):
+                        rendered_tool_call, _ = render_tool_call(
                             payload,
                             options.tool_mode,
                             options.tool_preview_chars,
                             image_handler,
                         )
-                        if isinstance(call_id, str) and call_id and tool_name:
-                            tool_names_by_call_id[call_id] = tool_name
                         write_section(dst, "Codex", rendered_tool_call, record_timestamp)
                     handled = True
                 elif payload_type in TOOL_OUTPUT_PAYLOAD_TYPES:
-                    if options.tool_mode != "none":
+                    tool_name = tool_output_display_name(payload, tool_names_by_call_id)
+                    if options.tool_mode != "none" and tool_name_is_included(
+                        tool_name, options.tool_include
+                    ):
                         write_section(
                             dst,
                             "Codex",

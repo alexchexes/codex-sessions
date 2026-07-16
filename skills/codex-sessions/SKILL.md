@@ -39,10 +39,11 @@ codex-sessions <target> --md --md-tools names
 codex-sessions <target> --md --md-tools smart
 codex-sessions <target> --md --md-tools preview --md-tool-preview-chars 1200
 codex-sessions <target> --md --md-tools full
+codex-sessions <target> --md --md-tools full --md-tool-include '*ask_human*'
 codex-sessions <target> --md --md-include metadata
 ```
 
-Use `--timestamps` for timeline recovery. Use `--tool-duration-threshold 0` only when every tool duration matters.
+Use `--timestamps` for timeline recovery. Use `--tool-duration-threshold 0` only when every tool duration matters. `--md-tool-include` accepts case-sensitive shell-style glob patterns (quoted to prevent shell expansion); values without glob characters are exact matches. It filters enabled tools without enabling them itself.
 
 Use `--md-include metadata` only when turn context, token counts, cwd, model, or rate-limit information matters. Metadata-inclusive renders can be very noisy in long sessions because repeated turn contexts and token-count records may dwarf the dialogue.
 
@@ -60,11 +61,12 @@ codex-sessions find -i -r "regex|pattern"
 codex-sessions find --tools "shell command"
 codex-sessions find --metadata "repository-or-cwd"
 codex-sessions find --session <target> --search-in tool-inputs,tool-outputs "tool-or-needle"
+codex-sessions find --search-in visible,tool-inputs,tool-outputs --tool-include '*ask_human*' "needle"
 codex-sessions find --archives exclude "active-only needle"
 codex-sessions find --archives only "archived-only needle"
 ```
 
-`find` searches deserialized visible messages by default, highlights matches, groups results by session, and caches extracted text under `$CODEX_HOME/cache/codex-sessions/`. It includes archived sessions by default; archived results are labeled `ARCHIVED`. Use `--search-in` for precise targets: `visible`, `metadata`, `tool-inputs`, `tool-outputs`, `tools`, or `all`. For broad research, start with `find --all`, `--session`, `--line-width`, and `-m 0`, then render only the sessions that look relevant.
+`find` searches deserialized visible messages by default, highlights matches, groups results by session, and caches extracted text under `$CODEX_HOME/cache/codex-sessions/`. It includes archived sessions by default; archived results are labeled `ARCHIVED`. Use `--search-in` for precise targets: `visible`, `metadata`, `tool-inputs`, `tool-outputs`, `tools`, or `all`. Use `--tool-include` with quoted, case-sensitive shell-style globs to restrict enabled tool targets without filtering visible messages; values without glob characters remain exact matches, and ask-human input previews include its question and context. For broad research, start with `find --all`, `--session`, `--line-width`, and `-m 0`, then render only the sessions that look relevant.
 
 Use raw `rg` only for narrow file-format checks, missing record types, exact raw event fields/order not exposed clearly by Markdown, or fields not covered by `find`.
 

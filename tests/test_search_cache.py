@@ -21,7 +21,7 @@ class SearchCacheTests(unittest.TestCase):
     def test_search_cache_path_uses_codex_cache_directory(self) -> None:
         self.assertEqual(
             search_cache_path(Path("/tmp/codex")).as_posix(),
-            "/tmp/codex/cache/codex-sessions/search-v6.json",
+            "/tmp/codex/cache/codex-sessions/search-v7.json",
         )
 
     def test_read_search_cache_returns_entries_for_current_version(self) -> None:

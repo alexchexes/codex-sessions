@@ -17,7 +17,10 @@ from codex_sessions.cli import (  # noqa: E402
 )
 from codex_sessions.cli_args import (  # noqa: E402
     cli_prog_from_argv0,
+    parse_args,
+    parse_search_args,
     parse_search_targets,
+    parse_tool_includes,
 )
 from codex_sessions.core.terminal import (  # noqa: E402
     console_color_options,
@@ -79,6 +82,54 @@ class CliTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "Unknown --search-in target"):
             parse_search_targets(["not-a-target"])
+
+    def test_parse_tool_includes_supports_repeated_and_comma_separated_names(self) -> None:
+        self.assertEqual(
+            parse_tool_includes(
+                ["mcp__ask_human.ask_human,shell_command", "functions.apply_patch"],
+                "--tool-include",
+            ),
+            frozenset(
+                {
+                    "mcp__ask_human.ask_human",
+                    "shell_command",
+                    "functions.apply_patch",
+                }
+            ),
+        )
+        self.assertIsNone(parse_tool_includes(None, "--tool-include"))
+        with self.assertRaisesRegex(ValueError, "--tool-include names must not be empty"):
+            parse_tool_includes(["shell_command,"], "--tool-include")
+
+    def test_tool_include_options_are_repeatable(self) -> None:
+        markdown_args = parse_args(
+            [
+                "rollout.jsonl",
+                "--md-tool-include",
+                "mcp__ask_human.ask_human",
+                "--md-tool-include",
+                "shell_command",
+            ]
+        )
+        search_args = parse_search_args(
+            "find",
+            [
+                "needle",
+                "--tool-include",
+                "mcp__ask_human.ask_human",
+                "--tool-include",
+                "shell_command",
+            ],
+        )
+
+        self.assertEqual(
+            markdown_args.md_tool_include,
+            ["mcp__ask_human.ask_human", "shell_command"],
+        )
+        self.assertEqual(
+            search_args.tool_include,
+            ["mcp__ask_human.ask_human", "shell_command"],
+        )
 
     def test_find_rejects_search_in_with_broad_target_flags(self) -> None:
         with self.assertRaisesRegex(
